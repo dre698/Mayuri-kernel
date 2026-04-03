@@ -1,0 +1,47 @@
+name: VoidLine Kernel Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout
+      uses: actions/checkout@v3
+
+    - name: 🧰 Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y bc bison build-essential curl flex git libssl-dev libelf-dev python3 zip
+
+    - name: ⚡ Clone Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+    - name: 🔧 Setup environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_USER=LineXin" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_HOST=VoidLine" >> $GITHUB_ENV
+
+    - name: 🛠️ Build kernel
+      run: |
+        export PATH=$PWD/clang/bin:$PATH
+        make O=out ARCH=arm64 blossom_defconfig
+        make -j$(nproc --all) O=out \
+        ARCH=arm64 \
+        CC=clang \
+        CROSS_COMPILE=aarch64-linux-gnu- \
+        CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+    - name: 📦 Upload Image
+      uses: actions/upload-artifact@v3
+      with:
+        name: VoidLine-Kernel
+        path: out/arch/arm64/boot/Image.gz-dtb
