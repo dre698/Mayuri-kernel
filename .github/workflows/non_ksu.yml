@@ -1,0 +1,121 @@
+name: VoidLine Kernel Rebirth - non-ksu
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DEFCONFIG: blossom
+  CCACHE_DIR: /tmp/ccache
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: ?? Clone NIIGO kernel
+        run: |
+          git clone --depth=1 https://github.com/LineXin/VoidLine_Kernel_Rebirth_For_Blossom source
+
+      - name: ? Install deps + ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git bc bison flex build-essential \
+            libssl-dev libelf-dev zlib1g-dev \
+            clang lld llvm gcc g++ \
+            python3 ninja-build zip ccache
+
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(which ccache)
+          ccache -M 2G
+
+      - name: ?? Clone clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+      - name: ?? Notify start
+        run: |
+          VERSION="niigo-based"
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendMessage \
+            -d chat_id=${{ secrets.-1003050733874 }} \
+            -d text="?? VoidLine (niigo) build started"
+
+      - name: ??? Build kernel
+        run: |
+          cd source
+
+          mkdir -p out
+          START=$(date +%s)
+
+          export ARCH=arm64
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+
+          make O=out blossom_defconfig
+
+          make -j$(nproc --all) O=out \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            2>&1 | tee build.log
+
+          END=$(date +%s)
+          echo "BUILD_TIME=$((END - START))" >> $GITHUB_ENV
+
+      - name: ?? Find image
+        run: |
+          IMAGE=$(find source/out/arch/arm64/boot -name "Image.gz*" | head -n 1)
+
+          if [ -z "$IMAGE" ]; then
+            echo "? Kernel not found!"
+            exit 1
+          fi
+
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: ?? Build ZIP (AnyKernel3)
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+
+          cp $IMAGE ak3/Image.gz
+          cd ak3
+
+          sed -i 's/kernel.string=.*/kernel.string=VoidLine Kernel Rebirth - non-ksu/g' anykernel.sh
+
+          ZIP_NAME="VoidLine-Kernel-Rebirth-non-ksu-$(date +%Y%m%d).zip"
+          zip -r9 ../$ZIP_NAME * -x .git* README.md
+
+          cd ..
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: ?? Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoidLine-Kernel
+          path: ${{ env.ZIP_NAME }}
+
+      - name: ? Telegram success
+        if: success()
+        run: |
+          curl -s -F chat_id=${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }} \
+            -F document=@${{ env.ZIP_NAME }} \
+            -F caption="? VoidLine Kernel built!
+? Time: ${BUILD_TIME}s" \
+            https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendDocument
+
+      - name: ? Telegram fail
+        if: failure()
+        run: |
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendMessage \
+            -d chat_id=${{ secrets.-1003050733874 }} \
+            -d text="? VoidLine build failed!"
+
+      - name: ?? Send log
+        if: failure()
+        run: |
+          curl -s -F document=@source/build.log \
+            https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendDocument?chat_id=${{ secrets.-1003050733874 }}
