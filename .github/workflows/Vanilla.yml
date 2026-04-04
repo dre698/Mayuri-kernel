@@ -28,8 +28,8 @@ jobs:
             if (v=="") v="0"; if (p=="") p="0"; if (s=="") s="0";
             printf "%s.%s.%s", v, p, s
           }' Makefile)
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendMessage \
-            -d chat_id=${{ secrets.-1003050733874 }} \
+          curl -s -X POST https://api.telegram.org/bot${{ secrets."8644918421:AAGEe9GcgHTBVS8mGnNIM_jRIW3r9xyk6Rc" }}/sendMessage \
+            -d chat_id=${{ secrets."-1003050733874" }} \
             --data-urlencode "text=☢️ *Kernel Build Started!*
             *Device:* Blossom
             *Version:* Vanilla beta 0.2.1
@@ -95,8 +95,8 @@ jobs:
             if (v=="") v="0"; if (p=="") p="0"; if (s=="") s="0";
             printf "%s.%s.%s", v, p, s
           }' Makefile)
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+          curl -s -X POST https://api.telegram.org/bot${{ secrets."8644918421:AAGEe9GcgHTBVS8mGnNIM_jRIW3r9xyk6Rc" }}/sendMessage \
+            -d chat_id=${{ secrets."1003050733874" }} \
             --data-urlencode "text=☢️ *Complite the Build. Great!*
             *Device:* Blossom
             *Version:* Vanilla beta 0.2.1
@@ -161,13 +161,13 @@ jobs:
             🔐 *MD5:* \`${ZIP_MD5}\`
             📱 *Device:* Blossom" \
             -F parse_mode=Markdown \
-            https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendDocument
+            https://api.telegram.org/bot${{ secrets."8644918421:AAGEe9GcgHTBVS8mGnNIM_jRIW3r9xyk6Rc" }}/sendDocument
 
       - name: Notify failure on Telegram
         if: failure()
         run: |
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendMessage \
-            -d chat_id=${{ secrets.-1003050733874 }} \
+          curl -s -X POST https://api.telegram.org/bot${{ secrets."8644918421:AAGEe9GcgHTBVS8mGnNIM_jRIW3r9xyk6Rc" }}/sendMessage \
+            -d chat_id=${{ secrets."-1003050733874" }} \
             --data-urlencode "text=❌ *Kernel build failed!*
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${https://github.com/LineXin/VoidLine_Kernel_Rebirth_For_Blossom}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
@@ -175,5 +175,5 @@ jobs:
         if: always()
         run: |
           curl -s -F document=@build.log \
-            "https://api.telegram.org/bot${{ secrets.8644918421:AAFzQDHI9WDkWY9Vx6Xh-9RTivgruGyMDJ0 }}/sendDocument?chat_id=${{ secrets.-1003050733874 }}" \
+            "https://api.telegram.org/bot${{ secrets."8644918421:AAGEe9GcgHTBVS8mGnNIM_jRIW3r9xyk6Rc" }}/sendDocument?chat_id=${{ secrets."-1003050733874" }}" \
             -F caption="📄 Kernel build log"
