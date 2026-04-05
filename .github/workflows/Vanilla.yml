@@ -1,9 +1,6 @@
 name: VoidLine Kernel Rebirth non-ksu blossom
 
 on:
-  push:
-    branches:
-      - perf
   workflow_dispatch:
 
 env:
@@ -12,6 +9,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     steps:
       - name: 📥 Clone kernel
@@ -32,24 +30,20 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: ☢️ Telegram start
-        run: |
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-          -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-          -d text="🚀 VoidLine Kernel Rebirth non-ksu blossom build started"
-
       - name: 🛠️ Build kernel
         run: |
+          set -e
+
           cd source
           mkdir -p out
 
           export ARCH=arm64
+          export SUBARCH=arm64
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
 
           make O=out blossom_defconfig
           make O=out olddefconfig
 
-          # ✅ правильное имя (без пробелов!)
           echo "CONFIG_LOCALVERSION=\"-VoidLine_Kernel_Rebirth-non-ksu-blossom\"" >> out/.config
 
           make -j$(nproc --all) O=out \
@@ -59,12 +53,18 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             2>&1 | tee build.log
 
-      - name: 📦 Create ZIP
+      - name: 🔍 Check kernel output
         run: |
-          IMAGE=$(find source/out -type f -name "Image*" | head -n 1)
+          ls -R source/out/arch/arm64/boot || true
+
+      - name: 📦 Prepare ZIP
+        run: |
+          set -e
+
+          IMAGE=$(find source/out/arch/arm64/boot -type f \( -name "Image" -o -name "Image.gz" -o -name "Image.gz-dtb" \) | head -n 1)
 
           if [ -z "$IMAGE" ]; then
-            echo "❌ kernel not found"
+            echo "❌ Kernel не собрался"
             exit 1
           fi
 
@@ -73,14 +73,14 @@ jobs:
 
           cd ak3
 
-          # 🔥 УБИРАЕМ ВСЕ СТАРЫЕ БАННЕРЫ (включая White Society)
+          # 🔥 УДАЛЯЕМ СТАРЫЕ БАННЕРЫ
           sed -i '/ui_print/d' anykernel.sh
 
-          # 🔥 ТОП БАННЕР (ЧИСТЫЙ, НЕ ЛАГАЕТ)
+          # 🔥 ЧИСТЫЙ ТОП БАННЕР
           sed -i '1i\
           ui_print "==============================";\
           ui_print " VoidLine Kernel Rebirth";\
-          ui_print "   non-ksu blossom";\
+          ui_print "   non-ksu for blossom";\
           ui_print "------------------------------";\
           ui_print " Based on Niigo Kernel";\
           ui_print " Built by LineXin";\
@@ -99,16 +99,8 @@ jobs:
           name: VoidLine_Kernel_Rebirth-non-ksu-blossom
           path: ${{ env.ZIP_NAME }}
 
-      - name: ✅ Telegram success
-        if: success()
+      - name: 📤 Telegram
         run: |
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
           -F document=@${{ env.ZIP_NAME }} \
           https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
-
-      - name: ❌ Telegram fail
-        if: failure()
-        run: |
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-          -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-          -d text="❌ VoidLine build failed"
