@@ -70,7 +70,6 @@ jobs:
           make O=out ${DEFCONFIG}_defconfig
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
           
-          # Оставил твое имя и хост, чтобы niigo не вернулся!
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -104,10 +103,19 @@ jobs:
           # Копируем найденное ядро
           cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
           
-          # ПЕРЕХОДИМ В ПАПКУ ДО ИСПОЛЬЗОВАНИЯ SED
           cd ak3
           
-          echo "👉 Вставляем новый баннер"
+          echo "👉 Вычищаем старые названия из AnyKernel..."
+          # 1. Меняем внутреннее имя AnyKernel3 (которое выводится по умолчанию)
+          sed -i 's/kernel.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
+          
+          # 2. Принудительно вырезаем White Society, если оно застряло в тексте
+          sed -i 's/Welcome to White Society/VoidLine/g' anykernel.sh
+          
+          # 3. Удаляем старые кастомные ui_print
+          sed -i '/ui_print/d' anykernel.sh
+          
+          echo "👉 Вставляем новый чистый баннер..."
           cat << 'EOF' > banner_logo
           ui_print "==============================";
           ui_print " VoidLine Kernel Rebirth";
@@ -119,13 +127,17 @@ jobs:
           ui_print " ";
           EOF
           
-          # Чистим отступы и вставляем
+          # Убираем пробелы отступов YAML из нашего баннера
           sed -i 's/^[[:space:]]*//' banner_logo
+          
+          # Вставляем наш баннер сразу на вторую строку anykernel.sh
           sed -i '2r banner_logo' anykernel.sh
           
+          # Настраиваем под устройство
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|/dev/block/by-name/boot|g' anykernel.sh
           
+          # Упаковываем архив
           zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md banner_logo
           cd ..
           
