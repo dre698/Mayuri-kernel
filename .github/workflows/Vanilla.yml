@@ -123,7 +123,7 @@ jobs:
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
-          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
           
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
           
@@ -135,6 +135,14 @@ jobs:
           
           cp "$IMAGE" ak3/Image.gz
           echo "✅ Image.gz скопирован из $IMAGE"
+          cat << 'EOF' > ak3/banner
+******************************************
+* VoidLine Kernel Rebirth           *
+* Device: Blossom                *
+* Build by LineXin                *
+* Helio G25/G35 (MT6765)              *
+******************************************
+EOF 
           cd ak3
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/by-name/boot|g' anykernel.sh
