@@ -18,17 +18,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
-      - name: Notify start on Telegram
-        run: |
-          VERSION=$(awk -F'=' '/^VERSION[[:space:]]*=/ {v=$2} /^PATCHLEVEL[[:space:]]*=/ {p=$2} /^SUBLEVEL[[:space:]]*=/ {s=$2} END {gsub(/^[ \t]+|[ \t]+$/,"",v); gsub(/^[ \t]+|[ \t]+$/,"",p); gsub(/^[ \t]+|[ \t]+$/,"",s); printf "%s.%s.%s", v, p, s}' Makefile)
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            --data-urlencode "text=☢️ *Kernel Build Started!*
-            *Device:* Blossom
-            *Version:* Vanilla beta 0.2.1
-            *Kernel Version:* $VERSION" \
-            -d parse_mode=Markdown
-
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -36,7 +25,6 @@ jobs:
             git build-essential bc bison flex libssl-dev libelf-dev zlib1g-dev \
             lld llvm gcc g++ python2 ninja-build zip ccache
           sudo ln -sf /usr/bin/ld.lld /usr/bin/ld || true
-          sudo ln -sf "/usr/bin/python2" /usr/bin/python
           git clone --depth=1 https://github.com/kdrag0n/proton-clang -b master clang
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
@@ -44,57 +32,69 @@ jobs:
       - name: Build the kernel
         run: |
           mkdir -p out
-          START=$(date +%s)
+          touch build.log # Принудительно создаем файл, чтобы curl не выдавал exit code 3
+          
           export ARCH=arm64
           export CLANG_PATH="$PWD/clang/bin"
-          export GCC32_PATH="$PWD/gcc/bin"
-          export GCC64_PATH="$PWD/gcc64/bin"
-          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
+          export PATH="$CLANG_PATH:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
+          echo "=== Отключаем Werror ===" | tee -a build.log
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
           
-          make O=out ${DEFCONFIG}_defconfig
-          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
+          echo "=== Конфигурация ядра ===" | tee -a build.log
+          # Записываем вывод defconfig в лог
+          make O=out ARCH=arm64 ${DEFCONFIG}_defconfig 2>&1 | tee -a build.log
           
+          if [ ! -f out/.config ]; then
+            echo "❌ ОШИБКА: Файл .config не создался! Проверь имя defconfig." | tee -a build.log
+            exit 1
+          fi
+          
+          echo "=== Сборка ядра ===" | tee -a build.log
           make -j$(nproc --all) O=out \
-            CC=clang HOSTCC=gcc HOSTCXX=g++ \
+            ARCH=arm64 \
+            CC=clang \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
             KBUILD_BUILD_USER="LineXin" \
             KBUILD_BUILD_HOST="VoidLine" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            KBUILD_WERROR=0 2>&1 | tee build.log || exit 1
-          
-          echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            KBUILD_WERROR=0 2>&1 | tee -a build.log
 
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
-          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
-          [ -z "$IMAGE" ] && exit 1
+          if [ -z "$IMAGE" ]; then
+            echo "❌ Ядро не собралось, Image.gz отсутствует!"
+            exit 1
+          fi
+
+          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
 
-          # БЕЗОПАСНЫЙ СПОСОБ ДОБАВИТЬ БАННЕР (через временный скрипт)
-          echo 'ui_print " "' > ak3/banner
-          echo 'ui_print "--Ź   --Ź ------Ź --Ź------Ź --Ź     --Ź---Ź   --Ź-------Ź"' >> ak3/banner
-          echo 'ui_print "--Ś   --Ś--ă===--Ź--Ś--ă==--Ź--Ś     --Ś----Ź  --Ś--ă====-"' >> ak3/banner
-          echo 'ui_print "--Ś   --Ś--Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ă--Ź --Ś-----Ź  "' >> ak3/banner
-          echo 'ui_print "L--Ź --ă---Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ŚL--Ź--Ś--ă==-  "' >> ak3/banner
-          echo 'ui_print " L----ă- L------ă---Ś------ă--------Ź--Ś--Ś L----Ś-------Ź"' >> ak3/banner
-          echo 'ui_print "  L===-   L=====- L=-L=====- L======-L=-L=-  L===-L======-"' >> ak3/banner
-          echo 'ui_print " "' >> ak3/banner
-          echo 'ui_print "?? VoidLine Kernel Rebirth ??"' >> ak3/banner
-          echo 'ui_print "Device: Blossom"' >> ak3/banner
-          echo 'ui_print "Built by LineXin"' >> ak3/banner
+          {
+            echo 'ui_print " "'
+            echo 'ui_print "--Ź   --Ź ------Ź --Ź------Ź --Ź     --Ź---Ź   --Ź-------Ź"'
+            echo 'ui_print "--Ś   --Ś--ă===--Ź--Ś--ă==--Ź--Ś     --Ś----Ź  --Ś--ă====-"'
+            echo 'ui_print "--Ś   --Ś--Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ă--Ź --Ś-----Ź  "'
+            echo 'ui_print "L--Ź --ă---Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ŚL--Ź--Ś--ă==-  "'
+            echo 'ui_print " L----ă- L------ă---Ś------ă--------Ź--Ś--Ś L----Ś-------Ź"'
+            echo 'ui_print "  L===-   L=====- L=-L=====- L======-L=-L=-  L===-L======-"'
+            echo 'ui_print " "'
+            echo 'ui_print "?? VoidLine Kernel Rebirth ??"'
+            echo 'ui_print "Device: Blossom"'
+            echo 'ui_print "Built by LineXin"'
+            echo 'ui_print " "'
+          } > ak3/banner_logo
 
-          # Вставляем баннер в anykernel.sh после шебанга
-          sed -i '2r ak3/banner' ak3/anykernel.sh
+          sed -i '2r ak3/banner_logo' ak3/anykernel.sh
           
           cd ak3
           zip -r9 ../VoidLine_Kernel_Rebirth_blossom-non-ksu.zip * -x .git* README.md
           cd ..
-          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_Rebirth_blossom-non-ksu.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
         if: success()
@@ -103,20 +103,18 @@ jobs:
           name: VoidLine_Kernel_Rebirth_blossom-non-ksu
           path: VoidLine_Kernel_Rebirth_blossom-non-ksu.zip
 
-      - name: Notify success on Telegram
-        if: success()
+      - name: Notify Telegram
+        if: always()
         run: |
-          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine_Kernel_Rebirth_blossom-non-ksu.zip \
-            -F caption="✅ *Build Successful!*
-            ⏱ *Time:* ${BUILD_TIME}s
-            🔐 *MD5:* \`$ZIP_MD5\`
-            📱 *Device:* Blossom" \
-            -F parse_mode=Markdown \
-            https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
-
-      - name: Notify failure on Telegram
-        if: failure()
-        run: |
-          curl -s -F document=@build.log \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&caption=❌ Build failed"
+          if [ "${{ job.status }}" = "success" ]; then
+            ZIP_MD5=$(md5sum VoidLine_Kernel_Rebirth_blossom-non-ksu.zip | cut -d ' ' -f1)
+            curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+              -F document=@VoidLine_Kernel_Rebirth_blossom-non-ksu.zip \
+              -F caption="✅ *Build Success!* (MD5: \`$ZIP_MD5\`)" \
+              -F parse_mode=Markdown \
+              https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+          else
+            curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+              -F document=@build.log \
+              -F caption="❌ *Build Failed!* Вот полный лог ошибки." \
+              https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
