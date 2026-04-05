@@ -127,30 +127,20 @@ jobs:
           
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
           
-          
-          if [ -z "$IMAGE" ]; then
-            echo "❌ ОШИБКА: Image.gz не найден в out/arch/arm64/boot!"
-            ls -R out/
-            exit 1
-          fi
-          
-          cp "$IMAGE" ak3/Image.gz
-          echo "✅ Image.gz скопирован из $IMAGE"
-          echo 'ui_print " "'
-            echo 'ui_print "--Ź   --Ź ------Ź --Ź------Ź --Ź     --Ź---Ź   --Ź-------Ź"'
-            echo 'ui_print "--Ś   --Ś--ă===--Ź--Ś--ă==--Ź--Ś     --Ś----Ź  --Ś--ă====-"'
-            echo 'ui_print "--Ś   --Ś--Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ă--Ź --Ś-----Ź  "'
-            echo 'ui_print "L--Ź --ă---Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ŚL--Ź--Ś--ă==-  "'
-            echo 'ui_print " L----ă- L------ă---Ś------ă--------Ź--Ś--Ś L----Ś-------Ź"'
-            echo 'ui_print "  L===-   L=====- L=-L=====- L======-L=-L=-  L===-L======-"'
-            echo 'ui_print " "'
-            echo 'ui_print " VoidLine Kernel Rebirth "'
-            echo 'ui_print "Device: Blossom"'
-            echo 'ui_print "Built by LineXin"'
-            echo 'ui_print " "'
-          } > ak3/banner_logo
+           echo "👉 Cleaning old banners"
+          sed -i '/ui_print/d' anykernel.sh
 
-          sed -i '2r ak3/banner_logo' ak3/anykernel.sh
+          echo "👉 Adding clean banner"
+          sed -i '1i\
+          ui_print "==============================";\
+          ui_print " VoidLine Kernel Rebirth";\
+          ui_print "   non-ksu blossom";\
+          ui_print "------------------------------";\
+          ui_print " Based on Niigo Kernel";\
+          ui_print " Built by LineXin";\
+          ui_print "==============================";\
+          ui_print " ";' anykernel.sh
+         
           cd ak3
           
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
