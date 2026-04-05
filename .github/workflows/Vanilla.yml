@@ -123,7 +123,7 @@ jobs:
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
           
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
           
