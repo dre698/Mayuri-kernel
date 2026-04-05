@@ -132,6 +132,8 @@ jobs:
           
           # Вставляем наш баннер сразу на вторую строку anykernel.sh
           sed -i '2r banner_logo' anykernel.sh
+          sed -i 's/Welcome to White Society/VoidLine/g' anykernel.sh
+          sed -i '/ui_print/d' anykernel.sh
           
           # Настраиваем под устройство
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
