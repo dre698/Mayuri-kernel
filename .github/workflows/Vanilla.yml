@@ -135,14 +135,12 @@ jobs:
           
           cp "$IMAGE" ak3/Image.gz
           echo "✅ Image.gz скопирован из $IMAGE"
-          cat << 'EOF' > ak3/banner
-******************************************
-* VoidLine Kernel Rebirth           *
-* Device: Blossom                *
-* Build by LineXin                *
-* Helio G25/G35 (MT6765)              *
-******************************************
-EOF 
+          echo "******************************************" > ak3/banner
+          echo "* VoidLine Kernel Rebirth                *" >> ak3/banner
+          echo "* Device: Blossom                        *" >> ak3/banner
+          echo "* Build by LineXin                       *" >> ak3/banner
+          echo "* Made with love and..idk                *" >> ak3/banner
+          echo "******************************************" >> ak3/banner
           cd ak3
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/by-name/boot|g' anykernel.sh
