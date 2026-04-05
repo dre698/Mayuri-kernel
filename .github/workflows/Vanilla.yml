@@ -119,44 +119,59 @@ jobs:
             echo "❌ Ядро НЕ НАЙДЕНО в папке out!"
             exit 1
           fi
-
-      - name: Create AnyKernel3 Zip
+     - name: Create AnyKernel3 Zip
         if: success()
         run: |
+          # 1. Клонируем AnyKernel в папку ak3
           git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
           
-          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
+          # 2. Ищем скомпилированное ядро
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
+          if [ -z "$IMAGE" ]; then
+            echo "❌ ОШИБКА: Файл ядра не найден!"
+            exit 1
+          fi
           
-           echo "👉 Cleaning old banners"
-          sed -i '/ui_print/d' anykernel.sh
+          # Копируем ядро сразу в папку ak3
+          cp "$IMAGE" ak3/Image.gz
 
-          echo "👉 Adding clean banner"
-          sed -i '1i\
-          ui_print "==============================";\
-          ui_print " VoidLine Kernel Rebirth";\
-          ui_print "   non-ksu blossom";\
-          ui_print "------------------------------";\
-          ui_print " Based on Niigo Kernel";\
-          ui_print " Built by LineXin";\
-          ui_print "==============================";\
-          ui_print " ";' anykernel.sh
-         
+          # 3. Создаем баннер (логотип)
+          {
+            echo 'ui_print " "'
+            echo 'ui_print "--Ź   --Ź ------Ź --Ź------Ź --Ź     --Ź---Ź   --Ź-------Ź"'
+            echo 'ui_print "--Ś   --Ś--ă===--Ź--Ś--ă==--Ź--Ś     --Ś----Ź  --Ś--ă====-"'
+            echo 'ui_print "--Ś   --Ś--Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ă--Ź --Ś-----Ź  "'
+            echo 'ui_print "L--Ź --ă---Ś   --Ś--Ś--Ś  --Ś--Ś     --Ś--ŚL--Ź--Ś--ă==-  "'
+            echo 'ui_print " L----ă- L------ă---Ś------ă--------Ź--Ś--Ś L----Ś-------Ź"'
+            echo 'ui_print "  L===-   L=====- L=-L=====- L======-L=-L=-  L===-L======-"'
+            echo 'ui_print " "'
+            echo 'ui_print "?? VoidLine Kernel Rebirth ??"'
+            echo 'ui_print "Device: Blossom"'
+            echo 'ui_print "Built by LineXin"'
+            echo 'ui_print " "'
+          } > ak3/banner_logo
+
+          # 4. Переходим ВНУТРЬ папки ak3 и правим конфиги
           cd ak3
+          if [ -f anykernel.sh ]; then
+            echo "👉 Вставляем баннер в anykernel.sh"
+            sed -i '2r banner_logo' anykernel.sh
+            
+            echo "👉 Правим конфиг устройства"
+            sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
+            sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|/dev/block/by-name/boot|g' anykernel.sh
+          else
+            echo "❌ КРИТИЧЕСКАЯ ОШИБКА: anykernel.sh не найден в папке ak3!"
+            ls -la # Выводим список файлов для дебага
+            exit 1
+          fi
           
-          sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
-          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/by-name/boot|g' anykernel.sh
-          
-          zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md
+          # 5. Упаковываем
+          zip -r9 ../VoidLine_Kernel_Rebirth_blossom-non-ksu.zip * -x .git* README.md *placeholder
           cd ..
           
-          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_non-ksu_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
-
-      - name: Upload Flashable ZIP Artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: VoidLine_Kernel_non-ksu_blossom-Zip
-          path: VoidLine_Kernel_non-ksu_blossom.zip
+          # Считаем MD5 готового архива
+          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_Rebirth_blossom-non-ksu.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Notify success on Telegram
         if: success()
@@ -175,7 +190,7 @@ jobs:
         run: |
           curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            --data-urlencode "text=❌ *Kernel build failed!*
+            --data-urlencode "text=❌ *Kernel build failed! loshara nahui suka*
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${https://github.com/LineXin/VoidLine_Kernel_Rebirth_For_Blossom}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
       - name: Send build log to Telegram
