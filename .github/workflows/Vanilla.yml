@@ -12,77 +12,90 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: 📥 Clone kernel
-        run: |
-          git clone --depth=1 https://github.com/TelegramAt25/niigo_kernel_xiaomi_blossom source
 
-      - name: ⚙️ Install deps
+      - name: 📥 Clone kernel source
+        run: |
+          git clone https://github.com/TelegramAt25/niigo_kernel_xiaomi_blossom source
+
+      - name: ⚙️ Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             git bc bison flex build-essential \
             libssl-dev libelf-dev \
-            clang lld llvm make python2 zip curl
+            clang lld llvm make python2 \
+            zip curl
 
           sudo ln -sf /usr/bin/python2 /usr/bin/python || true
 
-      - name: 🔧 Clone clang
+      - name: 🔧 Clone clang toolchain
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          git clone https://github.com/kdrag0n/proton-clang clang
 
-      - name: 🛠️ Build kernel (FIXED)
+      - name: 📢 Telegram START
         run: |
-          set -e
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+          -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+          -d text="🚀 VoidLine Kernel Rebirth non-ksu blossom build started"
 
+      - name: 🛠️ Build kernel (DEBUG)
+        run: |
           cd source
 
           export ARCH=arm64
           export SUBARCH=arm64
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
 
-          echo "👉 Defconfig"
-          make blossom_defconfig
+          echo "=== DEFCONFIG ==="
+          make blossom_defconfig || exit 1
 
-          echo "👉 Build start"
-          make -j$(nproc --all) \
+          echo "=== APPLY BRANDING ==="
+          echo "CONFIG_LOCALVERSION=\"-VoidLine_Kernel_Rebirth-non-ksu-blossom\"" >> .config
+
+          echo "=== BUILD START ==="
+          make -j$(nproc) \
             CC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
-            2>&1 | tee build.log
+            > build.log 2>&1 || true
 
-      - name: 🔍 Find kernel image
+          echo "=== BUILD FINISHED ==="
+
+      - name: 🔍 Show build errors
         run: |
-          echo "Searching kernel..."
+          echo "===== LAST 120 LINES ====="
+          tail -n 120 source/build.log || true
 
+      - name: 🔎 Find kernel image
+        run: |
           IMAGE=$(find source -type f -name "Image*" | head -n 1)
 
           if [ -z "$IMAGE" ]; then
             echo "❌ Kernel не собрался"
-            echo "------ LOG ------"
-            tail -n 50 source/build.log || true
             exit 1
           fi
 
-          echo "✅ Found: $IMAGE"
+          echo "✅ Found kernel: $IMAGE"
           echo "IMAGE_PATH=$IMAGE" >> $GITHUB_ENV
 
-      - name: 📦 Make ZIP
+      - name: 📦 Prepare AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
+          git clone https://github.com/MrGadget84/AnyKernel3_blossom ak3
 
           cp "${{ env.IMAGE_PATH }}" ak3/Image.gz
 
           cd ak3
 
-          # 🔥 УБРАТЬ ВСЁ СТАРОЕ
+          echo "👉 Cleaning old banners"
           sed -i '/ui_print/d' anykernel.sh
 
-          # 🔥 ЧИСТЫЙ БАННЕР
+          echo "👉 Adding clean banner"
           sed -i '1i\
           ui_print "==============================";\
           ui_print " VoidLine Kernel Rebirth";\
           ui_print "   non-ksu blossom";\
           ui_print "------------------------------";\
+          ui_print " Based on Niigo Kernel";\
           ui_print " Built by LineXin";\
           ui_print "==============================";\
           ui_print " ";' anykernel.sh
@@ -93,8 +106,38 @@ jobs:
           cd ..
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: ⬆️ Upload
+      - name: ⬆️ Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: VoidLine_Kernel_Rebirth-non-ksu-blossom
           path: ${{ env.ZIP_NAME }}
+
+      - name: 📤 Telegram SUCCESS
+        if: success()
+        run: |
+          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+          -F document=@${{ env.ZIP_NAME }} \
+          https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+
+      - name: ❌ Telegram FAIL
+        if: failure()
+        run: |
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+          -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+          -d text="❌ VoidLine Kernel Rebirth build failed"
+
+      - name: 📄 Upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: source/build.log
+
+      - name: 🧹 Cleanup
+        run: |
+          rm -rf ak3 || true
+          rm -rf source/out || true
+
+      - name: 🟢 Done
+        run: |
+          echo "Workflow finished"
