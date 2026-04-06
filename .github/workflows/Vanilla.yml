@@ -48,7 +48,7 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {}+ || true
+          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {} + || true
           
           make O=out ${DEFCONFIG}_defconfig
           make -j$(nproc --all) O=out \
@@ -72,11 +72,11 @@ jobs:
           cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          # Перезаписываем anykernel.sh полностью, чтобы убить тролль-баннеры
+          # ТЕПЕРЬ С ОТСТУПАМИ (чтобы не было ошибки на 66 строке)
           cat << 'EOF' > anykernel.sh
-#!/usr/bin/sh
-# AnyKernel3 Distribution by osm0sis
-# Modified by LineXin for VoidLine Kernel
+          #!/usr/bin/sh
+          # AnyKernel3 Distribution by osm0sis
+          # Modified by LineXin for VoidLine Kernel
 
           do.devicecheck=1
           do.modules=0
@@ -90,7 +90,7 @@ jobs:
           ramdisk_compression=auto;
           patch_vbmeta_flag=auto;
 
-# UI Print
+          # UI Print
           ui_print " ";
           ui_print "==============================";
           ui_print "    VoidLine Kernel Rebirth";
@@ -104,7 +104,11 @@ jobs:
           dump_boot;
           write_boot;
           EOF
-
+          
+          # Убираем лишние пробелы, которые мы добавили для YAML
+          sed -i 's/^[[:space:]]\{1,10\}//' anykernel.sh
+          
+          # Зачистка бинарников и пропсов от тролль-надписей
           find . -type f -not -name "anykernel.sh" -exec sed -i 's/White Society/ /gi' {} + || true
           find . -type f -exec sed -i 's/лашпед/ /gi' {} + || true
           
@@ -120,7 +124,7 @@ jobs:
             CAPTION="✅ *Build Successful!*%0A⏱ *Time:* ${{ env.BUILD_TIME }}s%0A🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`"
           else
             FILE="build.log"
-            CAPTION="❌ *Build Failed!* Проверь логи сборки."
+            CAPTION="❌ *Build Failed!* Проверь логи."
           fi
           
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
