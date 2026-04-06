@@ -36,7 +36,7 @@ jobs:
         run: |
           curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-          -d text="🚀 VoidLine Kernel Rebirth non-ksu blossom build started"
+          -d text="🚀 VoidLine Kernel Rebirth non-ksu blossom build started, pls wait..."
 
       - name: 🛠️ Build kernel
         run: |
@@ -97,14 +97,14 @@ jobs:
 
           # 🔥 ЧИСТЫЙ БАННЕР В НАЧАЛЕ
           sed -i '1i\
-ui_print "==============================";\
-ui_print " VoidLine Kernel Rebirth";\
-ui_print "   non-ksu blossom";\
-ui_print "------------------------------";\
-ui_print " Based on Niigo Kernel";\
-ui_print " Built by LineXin";\
-ui_print "==============================";\
-ui_print " ";' anykernel.sh
+          ui_print "==============================";\
+          ui_print " VoidLine Kernel Rebirth";\
+          ui_print "   non-ksu blossom";\
+          ui_print "------------------------------";\
+          ui_print " Based on Niigo Kernel";\
+          ui_print " Built by LineXin";\
+          ui_print "==============================";\
+          ui_print " ";' anykernel.sh
 
           echo "=== ZIP ==="
           ZIP_NAME="VoidLine_Kernel_Rebirth-non-ksu-blossom.zip"
@@ -131,7 +131,7 @@ ui_print " ";' anykernel.sh
         run: |
           curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-          -d text="❌ VoidLine Kernel build failed"
+          -d text="❌ VoidLine Kernel build failed, log..."
 
       - name: 📄 Upload logs
         if: failure()
