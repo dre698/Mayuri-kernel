@@ -102,18 +102,13 @@ jobs:
           cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
           cd ak3
           
-          echo "👉 Включаем режим терминатора: уничтожаем White Society..."
-          # Глобальный поиск и замена вообще по всем файлам (включая скрытые бинарники скрипта установки)
-          find . -type f -exec sed -i 's/White Society/VoidLine Rebirth/gi' {} +
-          find . -type f -exec sed -i 's/Welcome to VoidLine Rebirth/VoidLine Kernel/gi' {} +
+          echo "👉 Удаляем захардкоженные баннеры от старого автора..."
+          # Это удалит ЦЕЛИКОМ СТРОКИ, в которых есть эти слова, в ЛЮБОМ файле архива
+          find . -type f -exec sed -i '/White Kernel Project/Id' {} +
+          find . -type f -exec sed -i '/Maintainer: MrGadget84/Id' {} +
+          find . -type f -exec sed -i '/White Society/Id' {} +
           
-          echo "👉 Чистим anykernel.sh..."
-          # Жесткая привязка имени ядра
-          sed -i 's/^kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
-          # Убиваем абсолютно все старые команды ui_print (баннеры)
-          sed -i '/ui_print/d' anykernel.sh
-          
-          echo "👉 Создаем новый ровный баннер..."
+          echo "👉 Создаем новый крутой баннер..."
           cat << 'EOF' > banner_logo
           ui_print "==============================";
           ui_print " VoidLine Kernel Rebirth";
@@ -124,16 +119,18 @@ jobs:
           ui_print "==============================";
           ui_print " ";
           EOF
-          
-          # Убираем пробелы и вставляем наш баннер второй строкой в скрипт
+          # Удаляем возможные пробелы слева
           sed -i 's/^[[:space:]]*//' banner_logo
+          
+          echo "👉 Вставляем баннер в скрипт..."
+          # Вставляем наш баннер сразу после запуска anykernel.sh
           sed -i '2r banner_logo' anykernel.sh
           
-          # Прописываем параметры Blossom
-          sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
-          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|/dev/block/by-name/boot|g' anykernel.sh
+          echo "👉 Обновляем переменные устройства..."
+          sed -i 's/^kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=blossom/g' anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/by-name/boot|g' anykernel.sh
           
-          # Упаковка
           zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md banner_logo
           cd ..
           
