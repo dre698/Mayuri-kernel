@@ -33,7 +33,7 @@ jobs:
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             --data-urlencode "text=☢️ *VoidLine Kernel Build Started!*
             *Device:* Blossom
-            *Version:* Rebirth Beta
+            *Version:* non-ksu
             *Kernel Version:* $VERSION
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${{ github.repository }}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
@@ -60,6 +60,7 @@ jobs:
           export GCC64_PATH="$PWD/gcc64/bin"
           export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
           
+          # Отключаем ошибки компилятора
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
@@ -81,57 +82,68 @@ jobs:
 
       - name: Set build info
         run: |
-          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -n "$IMAGE" ]; then
-            echo "IMAGE_FOUND=$IMAGE" >> $GITHUB_ENV
+          IMAGE_PATH=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
+          if [ -n "$IMAGE_PATH" ]; then
+            echo "IMAGE_FOUND=$IMAGE_PATH" >> $GITHUB_ENV
+            echo "✅ Ядро найдено: $IMAGE_PATH"
           else
+            echo "❌ Ядро не найдено!"
             exit 1
           fi
 
       - name: Create AnyKernel3 Zip
+        if: success()
         run: |
           git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
           cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
           cd ak3
           
-          # Удаляем весь старый текст
-          sed -i '/ui_print/d' anykernel.sh
-          find . -type f -exec sed -i '/White/Id' {} +
-          find . -type f -exec sed -i '/MrGadget84/Id' {} +
+          echo "👉 Безопасное удаление старых надписей..."
+          # Удаляем ТОЛЬКО строки со старым названием, не ломая остальные команды ui_print!
+          find . -type f -exec sed -i '/White Kernel Project/Id' {} +
+          find . -type f -exec sed -i '/Maintainer: MrGadget84/Id' {} +
+          find . -type f -exec sed -i '/White Society/Id' {} +
           
-          # Создаем баннер
+          echo "👉 Вставка баннера VoidLine..."
           cat << 'EOF' > banner.txt
-          ui_print " "
-          ui_print "=============================="
-          ui_print "    VoidLine Kernel Rebirth"
-          ui_print "        non-ksu blossom"
-          ui_print "------------------------------"
-          ui_print "       Built by LineXin"
-          ui_print "=============================="
-          ui_print " "
+          ui_print " ";
+          ui_print "==============================";
+          ui_print "   VoidLine Kernel Rebirth";
+          ui_print "       non-ksu blossom";
+          ui_print "------------------------------";
+          ui_print "      Built by LineXin";
+          ui_print "==============================";
+          ui_print " ";
           EOF
-          # Вставляем баннер сразу после первой строки (после #!/sbin/sh)
-          sed -i '1r banner.txt' anykernel.sh
           
-          # Конфиг устройства
+          # Убираем пробелы слева в banner.txt
+          sed -i 's/^[[:space:]]*//' banner.txt
+          
+          # Вставляем наш файл на 2-ю строчку (сразу после #!/system/bin/sh)
+          sed -i '2r banner.txt' anykernel.sh
+          
+          echo "👉 Обновление конфига устройства..."
+          sed -i 's/kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
           sed -i 's/device.name1=.*/device.name1=blossom/g' anykernel.sh
           sed -i 's|block=.*|block=/dev/block/by-name/boot|g' anykernel.sh
           
-          zip -r9 ../VoidLine_Rebirth_blossom.zip * -x .git* README.md banner.txt
+          zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md banner.txt
           cd ..
-          echo "ZIP_MD5=$(md5sum VoidLine_Rebirth_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
+          
+          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_non-ksu_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: VoidLine_Kernel_Blossom
-          path: VoidLine_Rebirth_blossom.zip
+          path: VoidLine_Kernel_non-ksu_blossom.zip
 
       - name: Notify success on Telegram
         if: success()
         run: |
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine_Rebirth_blossom.zip \
+            -F document=@VoidLine_Kernel_non-ksu_blossom.zip \
             -F caption="✅ *Build Successful!*
             ⏱ *Time:* ${{ env.BUILD_TIME }}s
             🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
