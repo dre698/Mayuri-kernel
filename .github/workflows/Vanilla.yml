@@ -41,29 +41,25 @@ jobs:
       - name: 🛠️ Build kernel
         run: |
           set -e
-
           cd source
 
           export ARCH=arm64
           export SUBARCH=arm64
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          echo "=== DEFCONFIG ==="
           make blossom_defconfig
-
-          echo "=== APPLY CONFIG ==="
           make olddefconfig
 
-          echo "=== BRANDING ==="
           echo "CONFIG_LOCALVERSION=\"-VoidLine_Kernel_Rebirth-non-ksu-blossom\"" >> .config
 
-          echo "=== BUILD START ==="
           make -j$(nproc) \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            2>&1 | tee build.log
-
+          CC=clang \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          2>&1 | tee build.log
       - name: 🔍 Debug output
         run: |
           echo "=== LAST LOG ==="
