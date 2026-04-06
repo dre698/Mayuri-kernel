@@ -66,16 +66,30 @@ jobs:
           tail -n 80 source/build.log || true
 
       - name: 🔎 Find kernel
-        run: |
-          IMAGE=$(find source -type f -name "Image*" | head -n 1)
+       echo "🔍 Searching kernel image..."       
+       KERNEL_DIR="source/arch/arm64/boot"
 
-          if [ -z "$IMAGE" ]; then
-            echo "❌ Kernel не собрался"
-            exit 1
+          ls -la $KERNEL_DIR || true
+
+          IMAGE=""
+
+          if [ -f "$KERNEL_DIR/Image.gz-dtb" ]; then
+          IMAGE="$KERNEL_DIR/Image.gz-dtb"
+          elif [ -f "$KERNEL_DIR/Image.gz" ]; then
+          IMAGE="$KERNEL_DIR/Image.gz"
+          elif [ -f "$KERNEL_DIR/Image" ]; then
+          IMAGE="$KERNEL_DIR/Image"
           fi
 
-          echo "✅ Kernel: $IMAGE"
-          echo "IMAGE_PATH=$IMAGE" >> $GITHUB_ENV
+          if [ -z "$IMAGE" ]; then
+          echo "❌ Kernel не найден, но билд был"
+          echo "Вот что есть в папке:"
+          ls -la $KERNEL_DIR || true
+          exit 1
+          fi
+
+echo "✅ Kernel найден: $IMAGE"
+        echo "IMAGE_PATH=$IMAGE" >> $GITHUB_ENV
 
       - name: 📦 Prepare AnyKernel3
         run: |
