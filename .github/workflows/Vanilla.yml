@@ -18,26 +18,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
-      - name: Notify start on Telegram
-        run: |
-          VERSION=$(awk -F'=' '
-          /^VERSION[[:space:]]*=/ {v=$2}
-          /^PATCHLEVEL[[:space:]]*=/ {p=$2}
-          /^SUBLEVEL[[:space:]]*=/ {s=$2}
-          END {
-            gsub(/^[ \t]+|[ \t]+$/,"",v); gsub(/^[ \t]+|[ \t]+$/,"",p); gsub(/^[ \t]+|[ \t]+$/,"",s);
-            if (v=="") v="0"; if (p=="") p="0"; if (s=="") s="0";
-            printf "%s.%s.%s", v, p, s
-          }' Makefile)
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            --data-urlencode "text=☢️ *VoidLine Kernel Build Started!*
-            *Device:* Blossom
-            *Version:* non-ksu
-            *Kernel Version:* $VERSION
-            *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${{ github.repository }}/commit/${GITHUB_SHA})" \
-            -d parse_mode=Markdown
-
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -55,20 +35,11 @@ jobs:
           mkdir -p out
           START=$(date +%s)
           export ARCH=arm64
-          export CLANG_PATH="$PWD/clang/bin"
-          export GCC32_PATH="$PWD/gcc/bin"
-          export GCC64_PATH="$PWD/gcc64/bin"
-          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
+          export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # ТЕ САМЫЕ СТРОКИ, ИЗ-ЗА КОТОРЫХ ПАДАЛА СБОРКА. Вернул на место.
-          find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=return-type//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=unknown-warning-option//g' {} +
+          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
-          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
-          
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -79,82 +50,76 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
             KBUILD_WERROR=0 2>&1 | tee build.log
-          
-          END=$(date +%s)
-          echo "BUILD_TIME=$((END - START))" >> $GITHUB_ENV
-
-      - name: Set build info
-        run: |
-          IMAGE_PATH=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -n "$IMAGE_PATH" ]; then
-            echo "IMAGE_FOUND=$IMAGE_PATH" >> $GITHUB_ENV
-            echo "✅ Ядро успешно собрано: $IMAGE_PATH"
-          else
-            echo "❌ Ядро НЕ СОБРАЛОСЬ! Смотри build.log"
-            exit 1
-          fi
+            
+          echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
 
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
           git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
-          cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
+          cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          echo "👉 Вырезаем старые копирайты..."
-          find . -type f -exec sed -i '/White Kernel Project/Id' {} +
-          find . -type f -exec sed -i '/Maintainer: MrGadget84/Id' {} +
-          find . -type f -exec sed -i '/White Society/Id' {} +
-          
-          echo "👉 Вставляем баннер VoidLine..."
-          cat << 'EOF' > banner.txt
+          echo "👉 Удаляем всё старое барахло..."
+          # Удаляем вообще всё содержимое anykernel.sh и пишем своё с нуля
+          cat << 'EOF' > anykernel.sh
+#!/usr/bin/sh
+# AnyKernel3 Distribution by osm0sis
+# Modified by LineXin for VoidLine Kernel
+
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=blossom
+          device.name2=angelica
+          device.name3=dandelion
+          device.name4=angelican
+          device.name5=angelicain
+          block=/dev/block/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+# UI Print
           ui_print " ";
           ui_print "==============================";
-          ui_print "   VoidLine Kernel Rebirth";
-          ui_print "       non-ksu blossom";
+          ui_print "    VoidLine Kernel Rebirth";
+          ui_print "        non-ksu blossom";
           ui_print "------------------------------";
-          ui_print "      Built by LineXin";
+          ui_print "       Built by LineXin";
           ui_print "==============================";
           ui_print " ";
+
+## AnyKernel methods (DO NOT CHANGE)
+# import patching functions/variables - see for reference
+          . tools/ak3-core.sh;
+
+## AnyKernel install
+          dump_boot;
+          write_boot;
+## end install
           EOF
           
-          # Форматируем отступы баннера
-          sed -i 's/^[[:space:]]*//' banner.txt
+          echo "👉 Финальная чистка от захардкоженного мусора в других файлах..."
+          # Если тролль засунул надпись в бинарники tools/, мы их тоже почистим
+          find . -type f -exec sed -i 's/Хахахах, не получилось поменять мой banner, лашпед :)/ /g' {} +
+          find . -type f -exec sed -i 's/White Society/ /g' {} +
           
-          # Инжект на вторую строку скрипта, чтобы не сломать AnyKernel
-          sed -i '2r banner.txt' anykernel.sh
-          
-          echo "👉 Патчим переменные..."
-          sed -i 's/kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
-          sed -i 's/device.name1=.*/device.name1=blossom/g' anykernel.sh
-          sed -i 's|block=.*|block=/dev/block/by-name/boot|g' anykernel.sh
-          
-          zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md banner.txt
+          zip -r9 ../VoidLine_Kernel_blossom.zip * -x .git* README.md
           cd ..
-          
-          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_non-ksu_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
+          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
-      - name: Upload Artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: VoidLine_Kernel_Blossom
-          path: VoidLine_Kernel_non-ksu_blossom.zip
-
-      - name: Notify success on Telegram
+      - name: Notify Telegram
         if: success()
         run: |
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine_Kernel_non-ksu_blossom.zip \
+            -F document=@VoidLine_Kernel_blossom.zip \
             -F caption="✅ *Build Successful!*
             ⏱ *Time:* ${{ env.BUILD_TIME }}s
             🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
-            📱 *Device:* Blossom" \
+            Тролль слит, баннер наш." \
             -F parse_mode=Markdown \
             https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
-
-      - name: Send build log
-        if: always()
-        run: |
-          curl -s -F document=@build.log \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&caption=📄 Kernel build log"
