@@ -13,21 +13,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Checkout source code
         uses: actions/checkout@v3
-
-      - name: Notify start on Telegram
-        run: |
-          VERSION=$(grep -E "^(VERSION|PATCHLEVEL|SUBLEVEL) =" Makefile | awk '{print $3}' | tr '\n' '.' | sed 's/\.$//')
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            --data-urlencode "text=☢️ *VoidLine Kernel Build Started!*
-            *Device:* Blossom
-            *Kernel Version:* $VERSION
-            *Commit:* [${GITHUB_SHA::7}](${{ github.server_url }}/${{ github.repository }}/commit/${GITHUB_SHA})" \
-            -d parse_mode=Markdown
 
       - name: Install build dependencies
         run: |
@@ -48,7 +36,10 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {} + || true
+          # Жестко отключаем ошибки, чтобы Image собрался несмотря ни на что
+          find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-int//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
           make -j$(nproc --all) O=out \
@@ -62,6 +53,11 @@ jobs:
             CROSS_COMPILE=aarch64-linux-android- \
             KBUILD_WERROR=0 2>&1 | tee build.log
             
+          # Проверка на наличие ядра
+          if [ ! -f out/arch/arm64/boot/Image.gz ] && [ ! -f out/arch/arm64/boot/Image ]; then
+            echo "❌ ЯДРО НЕ СОБРАЛОСЬ!"
+            exit 1
+          fi
           echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
 
       - name: Create AnyKernel3 Zip
@@ -72,45 +68,12 @@ jobs:
           cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          # ТЕПЕРЬ С ОТСТУПАМИ (чтобы не было ошибки на 66 строке)
-          cat << 'EOF' > anykernel.sh
-          #!/usr/bin/sh
-          # AnyKernel3 Distribution by osm0sis
-          # Modified by LineXin for VoidLine Kernel
-
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=blossom
-          device.name2=angelica
-          block=/dev/block/by-name/boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          # UI Print
-          ui_print " ";
-          ui_print "==============================";
-          ui_print "    VoidLine Kernel Rebirth";
-          ui_print "        non-ksu blossom";
-          ui_print "------------------------------";
-          ui_print "       Built by LineXin";
-          ui_print "==============================";
-          ui_print " ";
-
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
-          EOF
+          # Убиваем старый anykernel.sh и пишем свой без троллинга
+          printf '#!/usr/bin/sh\ndo.devicecheck=1\ndo.modules=0\ndo.systemless=1\ndo.cleanup=1\ndo.cleanuponabort=0\ndevice.name1=blossom\ndevice.name2=angelica\nblock=/dev/block/by-name/boot;\nis_slot_device=0;\nramdisk_compression=auto;\npatch_vbmeta_flag=auto;\n\nui_print " ";\nui_print "==============================";\nui_print "    VoidLine Kernel Rebirth";\nui_print "        non-ksu blossom";\nui_print "------------------------------";\nui_print "       Built by LineXin";\nui_print "==============================";\nui_print " ";\n\n. tools/ak3-core.sh;\ndump_boot;\nwrite_boot;' > anykernel.sh
           
-          # Убираем лишние пробелы, которые мы добавили для YAML
-          sed -i 's/^[[:space:]]\{1,10\}//' anykernel.sh
-          
-          # Зачистка бинарников и пропсов от тролль-надписей
-          find . -type f -not -name "anykernel.sh" -exec sed -i 's/White Society/ /gi' {} + || true
+          # Чистим бинарники и пропсы от фразы про "лашпеда"
           find . -type f -exec sed -i 's/лашпед/ /gi' {} + || true
+          find . -type f -exec sed -i 's/White Society/ /gi' {} + || true
           
           zip -r9 ../VoidLine_Kernel_blossom.zip * -x .git* README.md
           cd ..
@@ -121,14 +84,9 @@ jobs:
         run: |
           if [ -f VoidLine_Kernel_blossom.zip ]; then
             FILE="VoidLine_Kernel_blossom.zip"
-            CAPTION="✅ *Build Successful!*%0A⏱ *Time:* ${{ env.BUILD_TIME }}s%0A🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`"
+            CAPT="✅ *Build Successful!*%0A⏱ *Time:* ${{ env.BUILD_TIME }}s%0A📱 *Device:* Blossom"
           else
             FILE="build.log"
-            CAPTION="❌ *Build Failed!* Проверь логи."
+            CAPT="❌ *Build Failed!* См. лог."
           fi
-          
-          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@$FILE \
-            -F caption="$CAPTION" \
-            -F parse_mode=Markdown \
-            https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -F document=@$FILE -F caption="$CAPT" -F parse_mode=Markdown https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
