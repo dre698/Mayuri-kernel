@@ -18,28 +18,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
-      - name: Notify start on Telegram
-        run: |
-          VERSION=$(awk -F'=' '
-          /^VERSION[[:space:]]*=/ {v=$2}
-          /^PATCHLEVEL[[:space:]]*=/ {p=$2}
-          /^SUBLEVEL[[:space:]]*=/ {s=$2}
-          END {
-            gsub(/^[ \t]+|[ \t]+$/,"",v); gsub(/^[ \t]+|[ \t]+$/,"",p); gsub(/^[ \t]+|[ \t]+$/,"",s);
-            if (v=="") v="0"; if (p=="") p="0"; if (s=="") s="0";
-            printf "%s.%s.%s", v, p, s
-          }' Makefile)
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            --data-urlencode "text=☢️ *VoidLine Kernel Build Started!*
-            *Device:* Blossom
-            *Version:* non-ksu for blossom
-            *Arch:* arm64
-            *Defconfig:* $DEFCONFIG
-            *Kernel Version:* $VERSION
-            *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${{ github.repository }}/commit/${GITHUB_SHA})" \
-            -d parse_mode=Markdown
-
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -52,24 +30,21 @@ jobs:
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: Build the kernel and log output
+      - name: Build the kernel
         run: |
           mkdir -p out
-          START=$(date +%s)
           export ARCH=arm64
           export CLANG_PATH="$PWD/clang/bin"
           export GCC32_PATH="$PWD/gcc/bin"
           export GCC64_PATH="$PWD/gcc64/bin"
           export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
           
+          # Убираем Werror, чтобы не стопорить сборку [cite: 9, 10]
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=return-type//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=unknown-warning-option//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
-          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
           
+          # Сборка с твоими данными [cite: 11]
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -79,84 +54,72 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            KBUILD_WERROR=0 2>&1 | tee build.log || (echo "❌ СБОРКА УПАЛА" && exit 1)
-          
-          END=$(date +%s)
-          echo "BUILD_TIME=$((END - START))" >> $GITHUB_ENV
-
-      - name: Set build info (time, md5)
-        run: |
-          IMAGE_PATH=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -n "$IMAGE_PATH" ] && [ -f "$IMAGE_PATH" ]; then
-            echo "IMAGE_FOUND=$IMAGE_PATH" >> $GITHUB_ENV
-            echo "✅ Ядро найдено: $IMAGE_PATH"
-          else
-            echo "❌ Ядро НЕ НАЙДЕНО в папке out!"
-            exit 1
-          fi
+            KBUILD_WERROR=0 2>&1 | tee build.log
 
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
+          # Ищем ядро (Image.gz или Image) [cite: 13]
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
+          if [ -z "$IMAGE" ]; then
+            echo "❌ Ядро не найдено!"
+            exit 1
+          fi
+          
           git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
-          cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
+          cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          echo "👉 Удаляем захардкоженные баннеры от старого автора..."
-          # Это удалит ЦЕЛИКОМ СТРОКИ, в которых есть эти слова, в ЛЮБОМ файле архива
-          find . -type f -exec sed -i '/White Kernel Project/Id' {} +
-          find . -type f -exec sed -i '/Maintainer: MrGadget84/Id' {} +
-          find . -type f -exec sed -i '/White Society/Id' {} +
+          # 1. Удаляем ВСЕ старые ui_print из скрипта
+          sed -i '/ui_print/d' anykernel.sh
           
-          echo "👉 Создаем новый крутой баннер..."
-          cat << 'EOF' > banner_logo
-          ui_print "==============================";
-          ui_print " VoidLine Kernel Rebirth";
-          ui_print "   non-ksu blossom";
-          ui_print "------------------------------";
-          ui_print " Based on Niigo Kernel";
-          ui_print " Built by LineXin";
-          ui_print "==============================";
-          ui_print " ";
+          # 2. Создаем файл с твоим новым баннером
+          cat << 'EOF' > my_banner
+          ui_print " "
+          ui_print "=============================="
+          ui_print "    VoidLine Kernel Rebirth"
+          ui_print "        non-ksu blossom"
+          ui_print "------------------------------"
+          ui_print "       Built by LineXin"
+          ui_print "=============================="
+          ui_print " "
           EOF
-          # Удаляем возможные пробелы слева
-          sed -i 's/^[[:space:]]*//' banner_logo
+
+          # 3. Склеиваем: баннер + остальное содержимое anykernel.sh
+          cat my_banner anykernel.sh > anykernel.sh.tmp
+          mv anykernel.sh.tmp anykernel.sh
           
-          echo "👉 Вставляем баннер в скрипт..."
-          # Вставляем наш баннер сразу после запуска anykernel.sh
-          sed -i '2r banner_logo' anykernel.sh
-          
-          echo "👉 Обновляем переменные устройства..."
-          sed -i 's/^kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
+          # 4. Фиксим конфиги устройства [cite: 15]
           sed -i 's/device.name1=.*/device.name1=blossom/g' anykernel.sh
-          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot|block=/dev/block/by-name/boot|g' anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/by-name/boot|g' anykernel.sh
           
-          zip -r9 ../VoidLine_Kernel_non-ksu_blossom.zip * -x .git* README.md banner_logo
+          # Упаковка [cite: 16]
+          zip -r9 ../VoidLine_blossom.zip * -x .git* README.md my_banner
           cd ..
           
-          echo "ZIP_MD5=$(md5sum VoidLine_Kernel_non-ksu_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
+          # Считаем MD5 правильно для GitHub Actions
+          echo "ZIP_MD5=$(md5sum VoidLine_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
-      - name: Upload Flashable ZIP Artifact
+      - name: Upload Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: VoidLine_Kernel_non-ksu_blossom-Zip
-          path: VoidLine_Kernel_non-ksu_blossom.zip
+          name: VoidLine_blossom_zip
+          [cite_start]path: VoidLine_blossom.zip [cite: 17]
 
-      - name: Notify success on Telegram
-        if: success()
-        run: |
-          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine_Kernel_non-ksu_blossom.zip \
-            -F caption="✅ *Build Successful!*
-            ⏱ *Time:* ${{ env.BUILD_TIME }}s
-            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
-            📱 *Device:* Blossom" \
-            -F parse_mode=Markdown \
-            https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
-
-      - name: Send build log to Telegram
+      - name: Notify Telegram
         if: always()
         run: |
-          curl -s -F document=@build.log \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&caption=📄 Kernel build log"
+          if [ -f VoidLine_blossom.zip ]; then
+            FILE="VoidLine_blossom.zip"
+            CAPTION="✅ *Build Successful!*%0A📱 *Device:* Blossom%0A🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`"
+          else
+            FILE="build.log"
+            CAPTION="❌ *Build Failed!* Check logs."
+          fi
+          
+          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -F document=@$FILE \
+            -F caption="$CAPTION" \
+            -F parse_mode=Markdown \
+            [cite_start]https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument [cite: 19]
