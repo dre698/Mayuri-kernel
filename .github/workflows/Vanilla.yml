@@ -101,15 +101,15 @@ jobs:
           
           # Создаем баннер
           cat << 'EOF' > banner.txt
-ui_print " "
-ui_print "=============================="
-ui_print "    VoidLine Kernel Rebirth"
-ui_print "        non-ksu blossom"
-ui_print "------------------------------"
-ui_print "       Built by LineXin"
-ui_print "=============================="
-ui_print " "
-EOF
+          ui_print " "
+          ui_print "=============================="
+          ui_print "    VoidLine Kernel Rebirth"
+          ui_print "        non-ksu blossom"
+          ui_print "------------------------------"
+          ui_print "       Built by LineXin"
+          ui_print "=============================="
+          ui_print " "
+          EOF
           # Вставляем баннер сразу после первой строки (после #!/sbin/sh)
           sed -i '1r banner.txt' anykernel.sh
           
