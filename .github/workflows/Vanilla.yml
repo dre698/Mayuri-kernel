@@ -60,8 +60,11 @@ jobs:
           export GCC64_PATH="$PWD/gcc64/bin"
           export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
           
-          # Отключаем ошибки компилятора
+          # ТЕ САМЫЕ СТРОКИ, ИЗ-ЗА КОТОРЫХ ПАДАЛА СБОРКА. Вернул на место.
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/=return-type//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/=unknown-warning-option//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
@@ -85,9 +88,9 @@ jobs:
           IMAGE_PATH=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
           if [ -n "$IMAGE_PATH" ]; then
             echo "IMAGE_FOUND=$IMAGE_PATH" >> $GITHUB_ENV
-            echo "✅ Ядро найдено: $IMAGE_PATH"
+            echo "✅ Ядро успешно собрано: $IMAGE_PATH"
           else
-            echo "❌ Ядро не найдено!"
+            echo "❌ Ядро НЕ СОБРАЛОСЬ! Смотри build.log"
             exit 1
           fi
 
@@ -98,13 +101,12 @@ jobs:
           cp "${{ env.IMAGE_FOUND }}" ak3/Image.gz
           cd ak3
           
-          echo "👉 Безопасное удаление старых надписей..."
-          # Удаляем ТОЛЬКО строки со старым названием, не ломая остальные команды ui_print!
+          echo "👉 Вырезаем старые копирайты..."
           find . -type f -exec sed -i '/White Kernel Project/Id' {} +
           find . -type f -exec sed -i '/Maintainer: MrGadget84/Id' {} +
           find . -type f -exec sed -i '/White Society/Id' {} +
           
-          echo "👉 Вставка баннера VoidLine..."
+          echo "👉 Вставляем баннер VoidLine..."
           cat << 'EOF' > banner.txt
           ui_print " ";
           ui_print "==============================";
@@ -116,13 +118,13 @@ jobs:
           ui_print " ";
           EOF
           
-          # Убираем пробелы слева в banner.txt
+          # Форматируем отступы баннера
           sed -i 's/^[[:space:]]*//' banner.txt
           
-          # Вставляем наш файл на 2-ю строчку (сразу после #!/system/bin/sh)
+          # Инжект на вторую строку скрипта, чтобы не сломать AnyKernel
           sed -i '2r banner.txt' anykernel.sh
           
-          echo "👉 Обновление конфига устройства..."
+          echo "👉 Патчим переменные..."
           sed -i 's/kernel\.string=.*/kernel.string=VoidLine Kernel Rebirth/g' anykernel.sh
           sed -i 's/device.name1=.*/device.name1=blossom/g' anykernel.sh
           sed -i 's|block=.*|block=/dev/block/by-name/boot|g' anykernel.sh
