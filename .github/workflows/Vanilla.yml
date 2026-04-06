@@ -18,6 +18,17 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
+      - name: Notify start on Telegram
+        run: |
+          VERSION=$(grep -E "^(VERSION|PATCHLEVEL|SUBLEVEL) =" Makefile | awk '{print $3}' | tr '\n' '.' | sed 's/\.$//')
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            --data-urlencode "text=☢️ *VoidLine Kernel Build Started!*
+            *Device:* Blossom
+            *Kernel Version:* $VERSION
+            *Commit:* [${GITHUB_SHA::7}](${{ github.server_url }}/${{ github.repository }}/commit/${GITHUB_SHA})" \
+            -d parse_mode=Markdown
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -37,7 +48,7 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
+          find . -name "Makefile*" -exec sed -i 's/-Werror//g' {}+ || true
           
           make O=out ${DEFCONFIG}_defconfig
           make -j$(nproc --all) O=out \
@@ -61,8 +72,7 @@ jobs:
           cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          echo "👉 Удаляем всё старое барахло..."
-          # Удаляем вообще всё содержимое anykernel.sh и пишем своё с нуля
+          # Перезаписываем anykernel.sh полностью, чтобы убить тролль-баннеры
           cat << 'EOF' > anykernel.sh
 #!/usr/bin/sh
 # AnyKernel3 Distribution by osm0sis
@@ -75,9 +85,6 @@ jobs:
           do.cleanuponabort=0
           device.name1=blossom
           device.name2=angelica
-          device.name3=dandelion
-          device.name4=angelican
-          device.name5=angelicain
           block=/dev/block/by-name/boot;
           is_slot_device=0;
           ramdisk_compression=auto;
@@ -93,33 +100,31 @@ jobs:
           ui_print "==============================";
           ui_print " ";
 
-## AnyKernel methods (DO NOT CHANGE)
-# import patching functions/variables - see for reference
           . tools/ak3-core.sh;
-
-## AnyKernel install
           dump_boot;
           write_boot;
-## end install
           EOF
-          
-          echo "👉 Финальная чистка от захардкоженного мусора в других файлах..."
-          # Если тролль засунул надпись в бинарники tools/, мы их тоже почистим
-          find . -type f -exec sed -i 's/Хахахах, не получилось поменять мой banner, лашпед :)/ /g' {} +
-          find . -type f -exec sed -i 's/White Society/ /g' {} +
+
+          find . -type f -not -name "anykernel.sh" -exec sed -i 's/White Society/ /gi' {} + || true
+          find . -type f -exec sed -i 's/лашпед/ /gi' {} + || true
           
           zip -r9 ../VoidLine_Kernel_blossom.zip * -x .git* README.md
           cd ..
           echo "ZIP_MD5=$(md5sum VoidLine_Kernel_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Notify Telegram
-        if: success()
+        if: always()
         run: |
+          if [ -f VoidLine_Kernel_blossom.zip ]; then
+            FILE="VoidLine_Kernel_blossom.zip"
+            CAPTION="✅ *Build Successful!*%0A⏱ *Time:* ${{ env.BUILD_TIME }}s%0A🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`"
+          else
+            FILE="build.log"
+            CAPTION="❌ *Build Failed!* Проверь логи сборки."
+          fi
+          
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine_Kernel_blossom.zip \
-            -F caption="✅ *Build Successful!*
-            ⏱ *Time:* ${{ env.BUILD_TIME }}s
-            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
-            Тролль слит, баннер наш." \
+            -F document=@$FILE \
+            -F caption="$CAPTION" \
             -F parse_mode=Markdown \
             https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
