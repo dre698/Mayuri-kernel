@@ -26,8 +26,6 @@ jobs:
             --data-urlencode "text=☢️ *Kernel Build Started!*
             *Device:* Blossom
             *Version:* non-ksu
-            *Arch:* arm64
-            *Defconfig:* $DEFCONFIG
             *Kernel Version:* $VERSION
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
@@ -51,7 +49,7 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Фикс ворнингов (команды в одну строку)
+          # Объединенные команды правки Makefile
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/=return-type//g' {} +
@@ -67,50 +65,48 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            KBUILD_WERROR=0 2>&1 | tee build.log || (echo "❌ СБОРКА УПАЛА" && exit 1)
+            KBUILD_WERROR=0 2>&1 | tee build.log || exit 1
             
           echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
 
-      - name: Set build info (time, md5)
+      - name: Create AnyKernel3 Zip
         run: |
-          IMAGE_PATH=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
-          if [ -f "$IMAGE_PATH" ]; then
-            echo "IMAGE_FOUND=$IMAGE_PATH" >> $GITHUB_ENV
-            echo "MD5_CHECKSUM=$(md5sum "$IMAGE_PATH" | cut -d ' ' -f1)" >> $GITHUB_ENV
-            echo "✅ Ядро найдено: $IMAGE_PATH"
-          else
-            echo "❌ Ядро НЕ НАЙДЕНО!"
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
+          if [ -z "$IMAGE" ]; then
+            echo "❌ Ядро не найдено, пропускаем упаковку"
             exit 1
           fi
-
-      - name: Create AnyKernel3 Zip
-        if: success()
-        run: |
+          
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
-          cp ${{ env.IMAGE_FOUND }} ak3/Image.gz
+          cp "$IMAGE" ak3/Image.gz
           cd ak3
-          # Твои правки в anykernel.sh (если нужно)
-          sed -i 's/device.name1=angelican/device.name1=blossom/g' anykernel.sh
-          zip -r9 ../VoidLine-KernelRebirth-non-ksuBlossom.zip * -x .git* README.md
+          sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
+          zip -r9 ../VoidLine-Kernel-Blossom.zip * -x .git* README.md
           cd ..
-          echo "ZIP_MD5=$(md5sum VoidLine-KernelRebirth-non-ksuBlossom.zip.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
+          echo "ZIP_MD5=$(md5sum VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Notify success on Telegram
         if: success()
         run: |
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine-KernelRebirth-non-ksuBlossom.zip.zip \
+            -F document=@VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip \
             -F caption="✅ *Build Successful!*
             ⏱ *Time:* ${{ env.BUILD_TIME }}s
-            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
-            📱 *Device:* Blossom" \
+            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`" \
             -F parse_mode=Markdown \
             https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
 
-      - name: Notify failure or Send Log
-        if: always()
+      - name: Send build log to Telegram on failure
+        if: failure()
         run: |
-          if [ ! -f VoidLine-Kernel-Blossom.zip ]; then
-            curl -s -F document=@build.log \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&caption=❌ Build Failed. Check log."
+          # Проверяем наличие лога перед отправкой, чтобы избежать ошибки 26
+          if [ -f build.log ]; then
+            curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+              -F document=@build.log \
+              -F caption="❌ *Build Failed!* Проверь лог ошибок." \
+              https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+          else
+            curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+              -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+              -d text="❌ *Build Failed!* Лог не был создан."
           fi
