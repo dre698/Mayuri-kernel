@@ -9,6 +9,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
+  ZIP_NAME: "VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip"
 
 jobs:
   build:
@@ -25,7 +26,7 @@ jobs:
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             --data-urlencode "text=☢️ *Kernel Build Started!*
             *Device:* Blossom
-            *Version:* non-ksu
+            *Version:* Vanilla beta 0.2.1
             *Kernel Version:* $VERSION
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
@@ -42,18 +43,15 @@ jobs:
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: Build the kernel and log output
+      - name: Build the kernel
         run: |
           mkdir -p out
           START=$(date +%s)
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Объединенные команды правки Makefile
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=return-type//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/=unknown-warning-option//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
@@ -65,41 +63,45 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            KBUILD_WERROR=0 2>&1 | tee build.log || exit 1
+            KBUILD_WERROR=0 2>&1 | tee build.log
             
           echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
 
       - name: Create AnyKernel3 Zip
+        if: success()
         run: |
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
           if [ -z "$IMAGE" ]; then
-            echo "❌ Ядро не найдено, пропускаем упаковку"
+            echo "❌ Ядро не найдено, сборка скорее всего упала."
             exit 1
           fi
           
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
           cd ak3
+          # Исправляем скрипт под blossom, если это еще не сделано в твоем репо
           sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
-          zip -r9 ../VoidLine-Kernel-Blossom.zip * -x .git* README.md
+          
+          zip -r9 ../${{ env.ZIP_NAME }} * -x .git* README.md
           cd ..
-          echo "ZIP_MD5=$(md5sum VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
+          echo "ZIP_MD5=$(md5sum ${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: Notify success on Telegram
         if: success()
         run: |
           curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-            -F document=@VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip \
+            -F document=@${{ env.ZIP_NAME }} \
             -F caption="✅ *Build Successful!*
             ⏱ *Time:* ${{ env.BUILD_TIME }}s
-            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`" \
+            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
+            📱 *Device:* Blossom" \
             -F parse_mode=Markdown \
             https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
 
-      - name: Send build log to Telegram on failure
+      - name: Notify failure on Telegram
         if: failure()
         run: |
-          # Проверяем наличие лога перед отправкой, чтобы избежать ошибки 26
+          # Отправляем лог только если файл существует
           if [ -f build.log ]; then
             curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
               -F document=@build.log \
@@ -108,5 +110,5 @@ jobs:
           else
             curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
               -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-              -d text="❌ *Build Failed!* Лог не был создан."
+              -d text="❌ *Build Failed!* Сборка прервалась до создания лога."
           fi
