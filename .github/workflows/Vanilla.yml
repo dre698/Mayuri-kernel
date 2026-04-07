@@ -9,7 +9,8 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine-Kernel-Rebirth-non-ksu-Blossom.zip"
+  # Название твоего архива (поменяй под себя, если надо)
+  ZIP_NAME: "VoidLine-Kernel-Blossom.zip"
 
 jobs:
   build:
@@ -26,7 +27,6 @@ jobs:
             -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
             --data-urlencode "text=☢️ *Kernel Build Started!*
             *Device:* Blossom
-            *Version:* Vanilla beta 0.2.1
             *Kernel Version:* $VERSION
             *Commit:* [${GITHUB_SHA::7}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})" \
             -d parse_mode=Markdown
@@ -50,12 +50,15 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
+          # Чиним Makefile (убираем ошибки, которые стопают билд)
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
           
+          # КРИТИЧЕСКИЙ ФИКС: set -o pipefail заставит GitHub выдать ошибку, если make упадет
+          set -o pipefail
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -70,18 +73,10 @@ jobs:
       - name: Create AnyKernel3 Zip
         if: success()
         run: |
-          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" | head -n 1)
-          if [ -z "$IMAGE" ]; then
-            echo "❌ Ядро не найдено, сборка скорее всего упала."
-            exit 1
-          fi
-          
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
           cd ak3
-          # Исправляем скрипт под blossom, если это еще не сделано в твоем репо
-          sed -i 's/device.name1=maguro/device.name1=blossom/g' anykernel.sh
-          
           zip -r9 ../${{ env.ZIP_NAME }} * -x .git* README.md
           cd ..
           echo "ZIP_MD5=$(md5sum ${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
@@ -93,22 +88,20 @@ jobs:
             -F document=@${{ env.ZIP_NAME }} \
             -F caption="✅ *Build Successful!*
             ⏱ *Time:* ${{ env.BUILD_TIME }}s
-            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`
-            📱 *Device:* Blossom" \
+            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`" \
             -F parse_mode=Markdown \
             https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
 
-      - name: Notify failure on Telegram
+      - name: Notify failure / Send Log
         if: failure()
         run: |
-          # Отправляем лог только если файл существует
           if [ -f build.log ]; then
             curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
               -F document=@build.log \
-              -F caption="❌ *Build Failed!* Проверь лог ошибок." \
+              -F caption="❌ *Build Failed!* Ядро не собралось. Причина в логе." \
               https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
           else
             curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
               -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-              -d text="❌ *Build Failed!* Сборка прервалась до создания лога."
+              -d text="❌ *Build Failed!* Ошибка до начала сборки (проверь зависимости)."
           fi
