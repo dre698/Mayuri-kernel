@@ -13,6 +13,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout source code
         uses: actions/checkout@v3
@@ -36,9 +37,8 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Жестко отключаем ошибки, чтобы Image собрался несмотря ни на что
+          # Отключаем ворнинги, которые могут стопнуть билд
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-implicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-int//g' {} +
           
           make O=out ${DEFCONFIG}_defconfig
@@ -53,9 +53,8 @@ jobs:
             CROSS_COMPILE=aarch64-linux-android- \
             KBUILD_WERROR=0 2>&1 | tee build.log
             
-          # Проверка на наличие ядра
           if [ ! -f out/arch/arm64/boot/Image.gz ] && [ ! -f out/arch/arm64/boot/Image ]; then
-            echo "❌ ЯДРО НЕ СОБРАЛОСЬ!"
+            echo "❌ Ошибка: Ядро не собралось! Проверь build.log."
             exit 1
           fi
           echo "BUILD_TIME=$(($(date +%s) - START))" >> $GITHUB_ENV
@@ -64,17 +63,12 @@ jobs:
         if: success()
         run: |
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          git clone --depth=1 https://github.com/MrGadget84/AnyKernel3_blossom ak3
+          # Клонируем именно ТВОЙ форк с твоим баннером
+          git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
           cd ak3
           
-          # Убиваем старый anykernel.sh и пишем свой без троллинга
-          printf '#!/usr/bin/sh\ndo.devicecheck=1\ndo.modules=0\ndo.systemless=1\ndo.cleanup=1\ndo.cleanuponabort=0\ndevice.name1=blossom\ndevice.name2=angelica\nblock=/dev/block/by-name/boot;\nis_slot_device=0;\nramdisk_compression=auto;\npatch_vbmeta_flag=auto;\n\nui_print " ";\nui_print "==============================";\nui_print "    VoidLine Kernel Rebirth";\nui_print "        non-ksu blossom";\nui_print "------------------------------";\nui_print "       Built by LineXin";\nui_print "==============================";\nui_print " ";\n\n. tools/ak3-core.sh;\ndump_boot;\nwrite_boot;' > anykernel.sh
-          
-          # Чистим бинарники и пропсы от фразы про "лашпеда"
-          find . -type f -exec sed -i 's/лашпед/ /gi' {} + || true
-          find . -type f -exec sed -i 's/White Society/ /gi' {} + || true
-          
+          # Упаковываем всё как есть (скрипт anykernel.sh берется из твоего репо)
           zip -r9 ../VoidLine_Kernel_blossom.zip * -x .git* README.md
           cd ..
           echo "ZIP_MD5=$(md5sum VoidLine_Kernel_blossom.zip | cut -d ' ' -f1)" >> $GITHUB_ENV
@@ -84,9 +78,17 @@ jobs:
         run: |
           if [ -f VoidLine_Kernel_blossom.zip ]; then
             FILE="VoidLine_Kernel_blossom.zip"
-            CAPT="✅ *Build Successful!*%0A⏱ *Time:* ${{ env.BUILD_TIME }}s%0A📱 *Device:* Blossom"
+            CAPTION="✅ *Build Successful!*
+            📱 *Device:* Blossom / Angelica
+            ⏱ *Time:* ${{ env.BUILD_TIME }}s
+            🔐 *MD5:* \`${{ env.ZIP_MD5 }}\`"
           else
             FILE="build.log"
-            CAPT="❌ *Build Failed!* См. лог."
+            CAPTION="❌ *Build Failed!* Ядро не собралось. См. лог."
           fi
-          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -F document=@$FILE -F caption="$CAPT" -F parse_mode=Markdown https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+          
+          curl -s -F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -F document=@$FILE \
+            -F caption="$CAPTION" \
+            -F parse_mode=Markdown \
+            https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
