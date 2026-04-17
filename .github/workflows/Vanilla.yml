@@ -2,7 +2,7 @@
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
 # VERSION: Vanilla Edition 0.2.3
-# AUTHOR: LineXin
+# AUTHOR: LineXin Development Team
 # ==============================================================================
 
 name: VoidLine Kernel Rebirth non-ksu blossom
@@ -16,7 +16,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine-Kernel-Rebirth-Blossom.zip"
+  ZIP_NAME: "VoidLine-Kernel-Rebirth-non-ksu_Blossom.zip"
   BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -63,8 +63,6 @@ jobs:
       - name: 3.0 [PATCHING] Safe Makefile Repair
         run: |
           echo "Безопасное исправление Makefile..."
-          # Используем более точный поиск, чтобы не повредить функции (call ...)
-          # Удаляем только флаги, начинающиеся с -Werror и -Wimplicit
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
@@ -94,6 +92,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
+            LOCALVERSION="-VoidLine-Kernel-Rebirth-nonksu-blossom" \
             KBUILD_WERROR=0 2>&1 | tee build.log
             
           END_TIME=$(date +%s)
@@ -141,5 +140,5 @@ jobs:
           echo "Завершено."
 
 # ==============================================================================
-# END OF WORKFLOW (Target: ~168 lines)
+# END OF WORKFLOW
 # ==============================================================================
