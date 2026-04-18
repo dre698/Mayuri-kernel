@@ -92,7 +92,6 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            LOCALVERSION="-VKR-non-ksu_blossom" \
             KBUILD_WERROR=0 2>&1 | tee build.log
             
           END_TIME=$(date +%s)
