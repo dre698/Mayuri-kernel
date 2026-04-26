@@ -16,7 +16,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine-Kernel-Rebirth-Blossom.zip"
+  ZIP_NAME: "VoidLine_Kernel_Rebirth-ksu_blossom.zip"
   BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
