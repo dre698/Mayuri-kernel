@@ -83,7 +83,7 @@ jobs:
           
           # Загрузка и применение патчей KernelSU
           echo "Загрузка патчей KernelSU для 4.19..."
-          git clone --depth=1 https://github.com/MrGadget84/kernel_builder -b blossom ksu_build
+          git clone --depth=1 https://github.com/jonjeexe/KsuPatch -b blossom ksu_build
           
           echo "Применение патчей..."
           for p in ksu_build/ksu/patches/4.19/*.patch; do
