@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU (Jonje r-oss FIXED)
+# VERSION: Vanilla Edition + KernelSU (Jonje r-oss AUTO-PATH)
 # AUTHOR: LineXin Development Team
 # ==============================================================================
 
@@ -50,50 +50,46 @@ jobs:
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
 
-      - name: 4.0 [KSU] Applying Jonje Patches (Manual Mode)
+      - name: 4.0 [KSU] Applying Jonje Patches (Smart Search)
         run: |
-          # 1. Установка официального KernelSU
-          # Он создаст папку drivers/kernelsu и изменит Kconfig/Makefile в драйверах
+          # 1. Установка KernelSU
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           
-          # 2. Клонируем патчи Jonje (ветка r-oss)
-          git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatch
+          # 2. Клонируем патчи Jonje ветки r-oss
+          git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatchRepo
           
-          # 3. ПРИМЕНЯЕМ ПАТЧ НАПРЯМУЮ (в обход глючного apply.sh)
-          # Мы находимся в корне ядра, патч лежит в KsuPatch/patches/4.19.patch
-          echo "Применение патча 4.19.patch..."
-          patch -p1 < KsuPatch/patches/4.19.patch || echo "ВНИМАНИЕ: Некоторые части патча могли не примениться, проверяем дальше..."
+          # 3. УМНЫЙ ПОИСК ПАТЧА
+          # Ищем любой файл с расширением .patch в склонированной папке
+          REAL_PATCH=$(find KsuPatchRepo -name "*.patch" | head -n 1)
           
-          # 4. Проверка прописки в драйверах (setup.sh это делает, но мы страхуемся)
-          if [ -f drivers/Makefile ]; then
-            grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
-            grep -q "kernelsu" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          if [ -f "$REAL_PATCH" ]; then
+            echo "Нашел патч по пути: $REAL_PATCH"
+            patch -p1 < "$REAL_PATCH"
           else
-            echo "КРИТИЧЕСКАЯ ОШИБКА: drivers/Makefile не найден!"
+            echo "ОШИБКА: Файл патча не найден в репозитории Jonje!"
             exit 1
           fi
+          
+          # 4. Проверка прописки в драйверах
+          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
 
       - name: 5.0 [CONFIG] Generating Kernel Config
         run: |
-          # Добавляем флаги строго по инструкции Jonje
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/${DEFCONFIG}_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/${DEFCONFIG}_defconfig
-          
-          # Стандартные зависимости
-          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${DEFCONFIG}_defconfig
-          echo "CONFIG_OVERLAY_FS=y" >> arch/arm64/configs/${DEFCONFIG}_defconfig
-          
-          mkdir -p out
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           make O=out ${DEFCONFIG}_defconfig
-          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
-
-      - name: 5.5 [SSH] Sending Cloudflare Tunnel URL
-        run: |
-          curl -s "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-            -d chat_id="$CHAT_ID" \
-            -d text="SSH Debug: ssh -o ProxyCommand='cloudflared access tcp --hostname ${CF_URL}' runner@localhost"
+          
+          # Активируем нужные флаги
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
+          echo "CONFIG_OVERLAY_FS=y" >> out/.config
+          echo "CONFIG_KPROBES=y" >> out/.config
+          
+          # Для KernelSU Next и старых ядер лучше отключить это
+          sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' out/.config
+          
+          # Применяем изменения
+          make O=out olddefconfig
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
         run: |
@@ -109,11 +105,10 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CROSS_COMPILE=aarch64-linux-android- \
-            LOCALVERSION="-VoidLine-KSU-Jonje" \
+            LOCALVERSION="VKR-ksu_blossom" \
             KBUILD_WERROR=0 2>&1 | tee build.log
             
-          END_TIME=$(date +%s)
-          echo "B_TIME=$((END_TIME - START_TIME))" >> $GITHUB_ENV
+          echo "B_TIME=$(($(date +%s) - START_TIME))" >> $GITHUB_ENV
 
       - name: 7.0 [PACKAGE] AnyKernel3 Deployment
         if: success()
@@ -124,7 +119,6 @@ jobs:
           cd ak3
           zip -r9 ../${{ env.ZIP_NAME }} * -x .git* README.md
           cd ..
-          echo "Z_MD5=$(md5sum ${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: 8.0 [REPORT] Telegram Upload
         if: always()
@@ -136,6 +130,6 @@ jobs:
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Проверь логи." \
+              -F caption="❌ *Build Failed!* Опять патчи или конфиг." \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
