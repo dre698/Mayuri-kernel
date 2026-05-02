@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU (Jonje MANUAL FIX)
+# VERSION: Vanilla Edition + KernelSU (Telegram Enhanced)
 # AUTHOR: LineXin Development Team
 # ==============================================================================
 
@@ -31,6 +31,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: 1.1 [TG] Notify Build Started
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+            -d chat_id="$CHAT_ID" \
+            -d text="🚀 *VoidLine Build Started*%0A📱 *Device:* Blossom%0A🌳 *Branch:* ${{ github.ref_name }}%0A👤 *By:* ${{ github.actor }}" \
+            -d parse_mode=Markdown
+
       - name: 2.0 [DEPS] Installing Toolchains
         run: |
           sudo apt-get update -qq
@@ -50,45 +57,41 @@ jobs:
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
 
-      - name: 4.0 [KSU] Manual Integration (The Fix)
+      - name: 4.0 [KSU] Correct Manual Integration
         run: |
-          # 1. Скачиваем исходники KSU напрямую в drivers/kernelsu
-          echo "Скачивание исходников KernelSU..."
-          rm -rf drivers/kernelsu
-          git clone --depth=1 https://github.com/tiann/KernelSU drivers/kernelsu
+          # Фикс структуры KernelSU
+          git clone --depth=1 https://github.com/tiann/KernelSU ksu_tmp
+          mkdir -p drivers/kernelsu
+          cp -r ksu_tmp/kernel/* drivers/kernelsu/
+          rm -rf ksu_tmp
           
-          # 2. Клонируем патчи Jonje (ветка r-oss)
+          # Патчи Jonje
           git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatchRepo
-          
-          # 3. Применяем патч для 4.19 (добавляет хуки в fs/exec.c)
-          echo "Применение патчей..."
           REAL_PATCH=$(find KsuPatchRepo -name "*.patch" | head -n 1)
-          patch -p1 < "$REAL_PATCH"
+          if [ -f "$REAL_PATCH" ]; then
+            patch -p1 < "$REAL_PATCH"
+          fi
           
-          # 4. Принудительная регистрация в системе сборки
-          # Мы не используем setup.sh, поэтому прописываем всё сами
-          sed -i '/drivers\/Makefile/a obj-y += kernelsu/' drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
-          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          # Регистрация в Makefile и Kconfig
+          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
       - name: 5.0 [CONFIG] Generating Kernel Config
         run: |
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
-          
-          # Создаем дефконфиг
           make O=out ${DEFCONFIG}_defconfig
           
-          # Включаем флаги KernelSU
-          echo "CONFIG_KSU=y" >> out/.config
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
-          echo "CONFIG_OVERLAY_FS=y" >> out/.config
-          echo "CONFIG_KPROBES=y" >> out/.config
+          # Флаги KSU
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_MANUAL_HOOK=y"
+            echo "CONFIG_OVERLAY_FS=y"
+            echo "CONFIG_KPROBES=y"
+          } >> out/.config
           
-          # Исправляем возможные конфликты
           sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' out/.config
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
-          
-          # Применяем изменения в конфиге
           make O=out olddefconfig
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
@@ -97,7 +100,6 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          set -o pipefail
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -119,17 +121,19 @@ jobs:
           cd ak3
           zip -r9 ../${{ env.ZIP_NAME }} * -x .git* README.md
           cd ..
+          echo "Z_MD5=$(md5sum ../${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
 
-      - name: 8.0 [REPORT] Telegram Upload
+      - name: 8.0 [REPORT] Telegram Final Notification
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            CAPTION="✅ *Build Successful!*%0A⏱ *Время:* ${{ env.B_TIME }}s"
+            CAPTION="✅ *Build Successful!*%0A📱 *Device:* Blossom%0A⏱ *Time:* ${{ env.B_TIME }}s%0A📦 *MD5:* \`${{ env.Z_MD5 }}\`"
             curl -s -F chat_id="$CHAT_ID" -F document=@${{ env.ZIP_NAME }} \
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Ошибка линковки исправлена." \
+              -F caption="❌ *Build Failed!*%0AПроверь логи сборки выше." \
+              -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
