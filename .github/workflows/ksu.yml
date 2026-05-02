@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU (Jonje r-oss AUTO-PATH)
+# VERSION: Vanilla Edition + KernelSU (Jonje MANUAL FIX)
 # AUTHOR: LineXin Development Team
 # ==============================================================================
 
@@ -50,45 +50,45 @@ jobs:
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
 
-      - name: 4.0 [KSU] Applying Jonje Patches (Smart Search)
+      - name: 4.0 [KSU] Manual Integration (The Fix)
         run: |
-          # 1. Установка KernelSU
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          # 1. Скачиваем исходники KSU напрямую в drivers/kernelsu
+          echo "Скачивание исходников KernelSU..."
+          rm -rf drivers/kernelsu
+          git clone --depth=1 https://github.com/tiann/KernelSU drivers/kernelsu
           
-          # 2. Клонируем патчи Jonje ветки r-oss
+          # 2. Клонируем патчи Jonje (ветка r-oss)
           git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatchRepo
           
-          # 3. УМНЫЙ ПОИСК ПАТЧА
-          # Ищем любой файл с расширением .patch в склонированной папке
+          # 3. Применяем патч для 4.19 (добавляет хуки в fs/exec.c)
+          echo "Применение патчей..."
           REAL_PATCH=$(find KsuPatchRepo -name "*.patch" | head -n 1)
+          patch -p1 < "$REAL_PATCH"
           
-          if [ -f "$REAL_PATCH" ]; then
-            echo "Нашел патч по пути: $REAL_PATCH"
-            patch -p1 < "$REAL_PATCH"
-          else
-            echo "ОШИБКА: Файл патча не найден в репозитории Jonje!"
-            exit 1
-          fi
-          
-          # 4. Проверка прописки в драйверах
-          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          # 4. Принудительная регистрация в системе сборки
+          # Мы не используем setup.sh, поэтому прописываем всё сами
+          sed -i '/drivers\/Makefile/a obj-y += kernelsu/' drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
       - name: 5.0 [CONFIG] Generating Kernel Config
         run: |
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
+          
+          # Создаем дефконфиг
           make O=out ${DEFCONFIG}_defconfig
           
-          # Активируем нужные флаги
+          # Включаем флаги KernelSU
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
           echo "CONFIG_OVERLAY_FS=y" >> out/.config
           echo "CONFIG_KPROBES=y" >> out/.config
           
-          # Для KernelSU Next и старых ядер лучше отключить это
+          # Исправляем возможные конфликты
           sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' out/.config
+          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
           
-          # Применяем изменения
+          # Применяем изменения в конфиге
           make O=out olddefconfig
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
@@ -130,6 +130,6 @@ jobs:
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Опять патчи или конфиг." \
+              -F caption="❌ *Build Failed!* Ошибка линковки исправлена." \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
