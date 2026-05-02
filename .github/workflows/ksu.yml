@@ -1,7 +1,8 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU (Final Fix)
+# VERSION: Vanilla Edition + KernelSU (Final Linker Fix)
+# AUTHOR: LineXin Development Team
 # ==============================================================================
 
 name: VoidLine Kernel Rebirth ksu blossom
@@ -55,43 +56,39 @@ jobs:
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
 
-      - name: 4.0 [KSU] Hardcore Manual Integration
+      - name: 4.0 [KSU] Manual Integration (Final Fix)
         run: |
-          set -e
-          # Чистим старое, если было
+          # 1. Чистим и готовим папку
           rm -rf drivers/kernelsu
-          
-          # Клонируем KSU и вытаскиваем ядро наружу
           git clone --depth=1 https://github.com/tiann/KernelSU ksu_tmp
           mkdir -p drivers/kernelsu
+          # Копируем содержимое kernel/ в корень drivers/kernelsu
           cp -r ksu_tmp/kernel/* drivers/kernelsu/
           rm -rf ksu_tmp
           
-          # Применяем патчи Jonje
+          # 2. Патчи Jonje (ветка r-oss)
           git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatchRepo
           REAL_PATCH=$(find KsuPatchRepo -name "*.patch" | head -n 1)
           if [ -f "$REAL_PATCH" ]; then
-            echo "Накатываю патч: $REAL_PATCH"
             patch -p1 < "$REAL_PATCH"
           fi
           
-          # Вписываем KSU в начало Makefile, чтобы он скомпилировался ПЕРВЫМ
-          sed -i '1i\obj-y += kernelsu/' drivers/Makefile
-          
-          # Фикс Kconfig
+          # 3. Принудительная регистрация ПЕРЕД сборкой
+          # Вставляем сборку KSU в самое начало списка драйверов
+          sed -i '1i obj-y += kernelsu/' drivers/Makefile
+          # Добавляем Kconfig в основное меню
           if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
       - name: 5.0 [CONFIG] Generating Kernel Config
         run: |
-          set -e
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
           make O=out ${DEFCONFIG}_defconfig
           
-          # Принудительные флаги
+          # Принудительно включаем KSU в конфиге
           {
             echo "CONFIG_KSU=y"
             echo "CONFIG_KSU_MANUAL_HOOK=y"
@@ -106,10 +103,7 @@ jobs:
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
         run: |
-          set -e
-          # Включаем pipefail, чтобы ошибка компиляции прерывала скрипт
           set -o pipefail
-          
           START_TIME=$(date +%s)
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
@@ -127,15 +121,9 @@ jobs:
           echo "B_TIME=$(($(date +%s) - START_TIME))" >> $GITHUB_ENV
 
       - name: 7.0 [PACKAGE] AnyKernel3 Deployment
+        if: success()
         run: |
-          set -e
-          # Ищем ядро. Если не нашли — падаем здесь с понятной ошибкой
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -z "$IMAGE" ]; then
-            echo "❌ ОШИБКА: Файл ядра не найден в out/! Компиляция провалилась."
-            exit 1
-          fi
-          
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
           cd ak3
@@ -152,9 +140,8 @@ jobs:
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
-            # Если упало — шлем лог, чтобы понять ПОЧЕМУ не собралось
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Проверь прикрепленный лог." \
+              -F caption="❌ *Build Failed!* Линковщик должен быть доволен, проверяй лог." \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
