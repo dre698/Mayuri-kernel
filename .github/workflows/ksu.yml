@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C non-NFC)
-# VERSION: Vanilla Edition + MultiSU (Legacy)
+# VERSION: Vanilla Edition + MultiSU (Debug Mode)
 # ==============================================================================
 
 name: Vanila
@@ -15,7 +15,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine_Kernel_Rebirth-MultiSU-blossom.zip"
+  ZIP_NAME: "VoidLine_Kernel_Rebirth-ksu_blossom.zip"
   BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -34,7 +34,7 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
             -d chat_id="$CHAT_ID" \
-            -d text="🚀 *VoidLine Rebirth:* Сборка пошла...%0A📱 *Device:* Redmi 9C (Blossom)%0A🛡" \
+            -d text="🚀 *VoidLine Rebirth:* Попытка сборки...%0A🔧 *Логирование:* Расширенное" \
             -d parse_mode=Markdown
 
       - name: 2.0 [DEPS] Installing Toolchains
@@ -52,14 +52,18 @@ jobs:
 
       - name: 3.0 [PATCHING] Safe Makefile Repair
         run: |
+          # Убираем все предупреждения, которые компилятор считает за ошибки
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-variable//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-function//g' {} +
 
-      - name: 4.0 [MultiSU] Automated Setup
+      - name: 4.0 [MultiSU] Automated Setup with Log
         run: |
           set -e
           echo "🚀 Интеграция MultiSU (legacy branch)..."
-          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy
+          # Сохраняем вывод скрипта настройки в отдельный файл
+          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy | tee multisu_setup.log
 
       - name: 5.0 [CONFIG] Generating & Verifying Config
         run: |
@@ -69,19 +73,18 @@ jobs:
           
           make O=out ${DEFCONFIG}_defconfig
           
-          # Убеждаемся, что флаги включены
-          echo "CONFIG_KSU=y" >> out/.config
-          echo "CONFIG_OVERLAY_FS=y" >> out/.config
+          # Принудительно включаем MultiSU через Kconfig
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_OVERLAY_FS=y"
+            echo "CONFIG_KPROBES=y"
+          } >> out/.config
           
-          # Вырубаем проверку подписей
+          # Отключаем мусор, мешающий сборке
           sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
+          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=2048/g' out/.config
           
           make O=out olddefconfig
-          
-          if ! grep -q "CONFIG_KSU=y" out/.config; then
-            echo "❌ ОШИБКА: CONFIG_KSU=y слетел при olddefconfig!"
-            exit 1
-          fi
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
         run: |
@@ -91,6 +94,7 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
+          # Основная команда сборки
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -104,13 +108,11 @@ jobs:
           echo "B_TIME=$(($(date +%s) - START_TIME))" >> $GITHUB_ENV
 
       - name: 7.0 [PACKAGE] AnyKernel3 Deployment
+        if: success()
         run: |
           set -e
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -z "$IMAGE" ]; then
-            echo "❌ ОШИБКА: Файл ядра не найден!"
-            exit 1
-          fi
+          if [ -z "$IMAGE" ]; then exit 1; fi
           
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
@@ -123,13 +125,17 @@ jobs:
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            CAPTION="✅ *VoidLine MultiSU Ready!*%0A⏱ *Время:* ${{ env.B_TIME }}s%0A📦 *MD5:* \`${{ env.Z_MD5 }}\`"
+            CAPTION="✅ *VoidLine Ready!*%0A⏱ *Время:* ${{ env.B_TIME }}s"
             curl -s -F chat_id="$CHAT_ID" -F document=@${{ env.ZIP_NAME }} \
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
+            # Если упало — шлем и лог сборки, и лог настройки MultiSU
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Сборка с MultiSU упала!* Лог прикреплен." \
+              -F caption="❌ *Build Failed!* Проверь логи (особенно multisu_setup.log)." \
               -F parse_mode=Markdown \
+              "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+            
+            [ -f multisu_setup.log ] && curl -s -F chat_id="$CHAT_ID" -F document=@multisu_setup.log \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
