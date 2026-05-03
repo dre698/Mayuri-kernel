@@ -52,11 +52,10 @@ jobs:
 
       - name: 3.0 [PATCHING] Safe Makefile Repair
         run: |
-          # Исправляем ошибку со скрина: убираем -Werror целиком, не ломая аргументы
+          # ФИКС: Добавлены пробелы перед '+' в командах find
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
-          # Принудительно отключаем проблемные проверки, чтобы clang не падал
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {}+
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-variable//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-function//g' {} +
 
@@ -64,7 +63,6 @@ jobs:
         run: |
           set -e
           echo "🚀 Интеграция MultiSU (legacy branch)..."
-          # Твой проверенный скрипт
           curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy | tee multisu_setup.log
 
       - name: 5.0 [CONFIG] Generating & Verifying Config
@@ -75,14 +73,12 @@ jobs:
           
           make O=out ${DEFCONFIG}_defconfig
           
-          # Принудительно включаем MultiSU через Kconfig
           {
             echo "CONFIG_KSU=y"
             echo "CONFIG_OVERLAY_FS=y"
             echo "CONFIG_KPROBES=y"
           } >> out/.config
           
-          # Отключаем мусор, мешающий сборке на Redmi 9C
           sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=2048/g' out/.config
           
@@ -96,7 +92,6 @@ jobs:
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Запускаем сборку с подавлением фатальных варнингов
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -133,9 +128,8 @@ jobs:
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
-            # Шлем логи для дебага, если опять упадет
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Проверь логи (особенно на наличие unknown argument)." \
+              -F caption="❌ *Build Failed!* Ошибка синтаксиса в 3.0 исправлена, чекни лог компиляции." \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
             
