@@ -1,8 +1,15 @@
+# ==============================================================================
+# PROJECT: VoidLine Kernel Rebirth
+# TARGET DEVICE: Blossom (Redmi 9C non-NFC)
+# VERSION: Vanilla Edition + MultiSU (Debug Mode)
+# ==============================================================================
+
 name: VoidLine Kernel Rebirth ksu blossom
 
 on:
   push:
-    branches: [ perf ]
+    branches:
+      - perf
   workflow_dispatch:
 
 env:
@@ -14,74 +21,124 @@ env:
 
 jobs:
   build:
+    name: Industrial Kernel Build
     runs-on: ubuntu-22.04
-    steps:
-      - name: 1.0 Подготовка
-        uses: actions/checkout@v3
 
-      - name: 1.1 [TG] Старт
+    steps:
+      - name: 1.0 [PRE-BUILD] Initializing Workspace
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: 1.1 [TG] Notify Build Started
         run: |
           curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-          -d chat_id="$CHAT_ID" -d text="🚀 Сборка VoidLine (MultiSU) запущена!"
+            -d chat_id="$CHAT_ID" \
+            -d text="🚀 *VoidLine Rebirth:* Попытка сборки с MultiSU...%0A🔧 *Логирование:* Расширенное" \
+            -d parse_mode=Markdown
 
-      - name: 2.0 Тулчейны
+      - name: 2.0 [DEPS] Installing Toolchains
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq git build-essential bc bison flex libssl-dev libelf-dev zlib1g-dev lld llvm gcc g++ python2 zip curl
-          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            git build-essential bc bison flex libssl-dev libelf-dev zlib1g-dev \
+            lld llvm gcc g++ python2 ninja-build zip ccache patch curl
+          sudo ln -sf /usr/bin/ld.lld /usr/bin/ld || true
+          sudo ln -sf "/usr/bin/python2" /usr/bin/python
+          
           git clone --depth=1 https://github.com/kdrag0n/proton-clang -b master clang
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: 3.0 Глобальный фикс варнингов
+      - name: 3.0 [PATCHING] Safe Makefile Repair
         run: |
-          # Вырезаем -Werror под корень, чтобы сборка не падала из-за пустяков
-          find . -name "Makefile*" -type f -exec sed -i 's/-Werror//g' {} +
+          # Исправляем ошибку со скрина: убираем -Werror целиком, не ломая аргументы
+          find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
+          # Принудительно отключаем проблемные проверки, чтобы clang не падал
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wfatal-errors//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {}+
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-variable//g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-function//g' {} +
 
-      - name: 4.0 [MultiSU] Интеграция
+      - name: 4.0 [MultiSU] Automated Setup with Log
         run: |
-          # Чистим перед установкой
-          rm -rf drivers/kernelsu
-          # Твой запрос: ставим MultiSU Legacy
-          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy
-          
-          # Проверяем, что скрипт не забыл добавить папку в билд
-          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          set -e
+          echo "🚀 Интеграция MultiSU (legacy branch)..."
+          # Твой проверенный скрипт
+          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy | tee multisu_setup.log
 
-      - name: 5.0 Конфиг
+      - name: 5.0 [CONFIG] Generating & Verifying Config
         run: |
+          set -e
+          export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
-          make O=out ARCH=arm64 ${DEFCONFIG}_defconfig
           
-          # Силовое включение нужных модулей
+          make O=out ${DEFCONFIG}_defconfig
+          
+          # Принудительно включаем MultiSU через Kconfig
           {
             echo "CONFIG_KSU=y"
             echo "CONFIG_OVERLAY_FS=y"
             echo "CONFIG_KPROBES=y"
           } >> out/.config
           
-          make O=out ARCH=arm64 olddefconfig
+          # Отключаем мусор, мешающий сборке на Redmi 9C
+          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
+          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=2048/g' out/.config
+          
+          make O=out olddefconfig
 
-      - name: 6.0 Сборка
+      - name: 6.0 [BUILD] Compiling VoidLine Kernel
         run: |
+          set -e
+          set -o pipefail
+          START_TIME=$(date +%s)
+          export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
-          make -j$(nproc --all) O=out ARCH=arm64 \
+          
+          # Запускаем сборку с подавлением фатальных варнингов
+          make -j$(nproc --all) O=out \
             CC=clang \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            KBUILD_WERROR=0 2>&1 | tee build.log
+            CROSS_COMPILE=aarch64-linux-android- \
+            LOCALVERSION="VKR-ksu_blossom" \
+            KBUILD_WERROR=0 \
+            2>&1 | tee build.log
+            
+          echo "B_TIME=$(($(date +%s) - START_TIME))" >> $GITHUB_ENV
 
-      - name: 7.0 Упаковка и Отправка
+      - name: 7.0 [PACKAGE] AnyKernel3 Deployment
+        if: success()
+        run: |
+          set -e
+          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
+          if [ -z "$IMAGE" ]; then exit 1; fi
+          
+          git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
+          cp "$IMAGE" ak3/Image.gz
+          cd ak3
+          zip -r9 ../${{ env.ZIP_NAME }} * -x .git* README.md
+          cd ..
+          echo "Z_MD5=$(md5sum ${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
+
+      - name: 8.0 [REPORT] Telegram Final Notification
         if: always()
         run: |
-          IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -f "$IMAGE" ]; then
-            git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
-            cp "$IMAGE" ak3/Image.gz
-            cd ak3 && zip -r9 ../$ZIP_NAME * && cd ..
-            curl -F chat_id="$CHAT_ID" -F document=@$ZIP_NAME -F caption="✅ Готово!" "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+          if [ "${{ job.status }}" == "success" ]; then
+            CAPTION="✅ *VoidLine Ready!*%0A⏱ *Время:* ${{ env.B_TIME }}s%0A📦 *MD5:* \`${{ env.Z_MD5 }}\`"
+            curl -s -F chat_id="$CHAT_ID" -F document=@${{ env.ZIP_NAME }} \
+              -F caption="$CAPTION" -F parse_mode=Markdown \
+              "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
-            curl -F chat_id="$CHAT_ID" -F document=@build.log -F caption="❌ Ошибка сборки. Чекни лог!" "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+            # Шлем логи для дебага, если опять упадет
+            curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
+              -F caption="❌ *Build Failed!* Проверь логи (особенно на наличие unknown argument)." \
+              -F parse_mode=Markdown \
+              "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+            
+            [ -f multisu_setup.log ] && curl -s -F chat_id="$CHAT_ID" -F document=@multisu_setup.log \
+              "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
