@@ -1,11 +1,10 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
-# TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU (Final Linker Fix)
-# AUTHOR: LineXin Development Team
+# TARGET DEVICE: Blossom (Redmi 9C non-NFC)
+# VERSION: Vanilla Edition + MultiSU (Legacy)
 # ==============================================================================
 
-name: VoidLine Kernel Rebirth ksu blossom
+name: Vanila
 
 on:
   push:
@@ -16,7 +15,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine_Kernel_Rebirth-ksu-blossom.zip"
+  ZIP_NAME: "VoidLine_Kernel_Rebirth-MultiSU-blossom.zip"
   BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -35,7 +34,7 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
             -d chat_id="$CHAT_ID" \
-            -d text="🚀 *VoidLine:* Сборка запущена...%0A📱 *Устройство:* Blossom" \
+            -d text="🚀 *VoidLine Rebirth:* Сборка пошла...%0A📱 *Device:* Redmi 9C (Blossom)%0A🛡" \
             -d parse_mode=Markdown
 
       - name: 2.0 [DEPS] Installing Toolchains
@@ -55,57 +54,38 @@ jobs:
         run: |
           find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
           find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
-          
-      - name: 4.0 [KSU] Manual Integration (Final Fix)
-        run: |
-          # 1. Чистим и готовим папку
-          rm -rf drivers/kernelsu
-          git clone --depth=1 https://github.com/tiann/KernelSU ksu_tmp
-          mkdir -p drivers/kernelsu
-          # Копируем содержимое kernel/ в корень drivers/kernelsu
-          cp -r ksu_tmp/kernel/* drivers/kernelsu/
-          rm -rf ksu_tmp
-          
-          # 2. Патчи Jonje (ветка r-oss)
-          git clone https://github.com/jonjeexe/KsuPatch.git -b r-oss KsuPatchRepo
-          REAL_PATCH=$(find KsuPatchRepo -name "*.patch" | head -n 1)
-          if [ -f "$REAL_PATCH" ]; then
-            patch -p1 < "$REAL_PATCH"
-          fi
-          
-          # 2.1 ТВОЙ ПАТЧ (добавлено)
-          if [ -f "kernel-4.19_5.4.patch" ]; then
-            patch -p1 < kernel-4.19_5.4.patch
-          fi
-          
-          # 3. Принудительная регистрация ПЕРЕД сборкой
-          sed -i '1i obj-y += kernelsu/' drivers/Makefile
-          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
 
-      - name: 5.0 [CONFIG] Generating Kernel Config
+      - name: 4.0 [MultiSU] Automated Setup
         run: |
+          set -e
+          echo "🚀 Интеграция MultiSU (legacy branch)..."
+          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy
+
+      - name: 5.0 [CONFIG] Generating & Verifying Config
+        run: |
+          set -e
           export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
           make O=out ${DEFCONFIG}_defconfig
           
-          # Принудительно включаем KSU в конфиге
-          {
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_MANUAL_HOOK=y"
-            echo "CONFIG_OVERLAY_FS=y"
-            echo "CONFIG_KPROBES=y"
-          } >> out/.config
+          # Убеждаемся, что флаги включены
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_OVERLAY_FS=y" >> out/.config
           
-          sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' out/.config
-          sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
+          # Вырубаем проверку подписей
+          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
           
           make O=out olddefconfig
+          
+          if ! grep -q "CONFIG_KSU=y" out/.config; then
+            echo "❌ ОШИБКА: CONFIG_KSU=y слетел при olddefconfig!"
+            exit 1
+          fi
 
       - name: 6.0 [BUILD] Compiling VoidLine Kernel
         run: |
+          set -e
           set -o pipefail
           START_TIME=$(date +%s)
           export ARCH=arm64
@@ -124,9 +104,14 @@ jobs:
           echo "B_TIME=$(($(date +%s) - START_TIME))" >> $GITHUB_ENV
 
       - name: 7.0 [PACKAGE] AnyKernel3 Deployment
-        if: success()
         run: |
+          set -e
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
+          if [ -z "$IMAGE" ]; then
+            echo "❌ ОШИБКА: Файл ядра не найден!"
+            exit 1
+          fi
+          
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
           cd ak3
@@ -138,13 +123,13 @@ jobs:
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            CAPTION="✅ *VoidLine Ready!*%0A⏱ *Время:* ${{ env.B_TIME }}s%0A📦 *MD5:* \`${{ env.Z_MD5 }}\`"
+            CAPTION="✅ *VoidLine MultiSU Ready!*%0A⏱ *Время:* ${{ env.B_TIME }}s%0A📦 *MD5:* \`${{ env.Z_MD5 }}\`"
             curl -s -F chat_id="$CHAT_ID" -F document=@${{ env.ZIP_NAME }} \
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Линковщик должен быть доволен, проверяй лог." \
+              -F caption="❌ *Сборка с MultiSU упала!* Лог прикреплен." \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           fi
