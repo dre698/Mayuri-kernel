@@ -52,12 +52,11 @@ jobs:
 
       - name: 3.0 [PATCHING] Safe Makefile Repair
         run: |
-          # ФИКС: Добавлены пробелы перед '+' в командах find
-          find . -name "Makefile*" -type f -exec sed -i 's/-Werror[^[:space:])]*//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wimplicit-function-declaration//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wreturn-type//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-variable//g' {} +
-          find . -name "Makefile*" -type f -exec sed -i 's/-Wunused-function//g' {} +
+          # ФИКС: Заменяем -Werror на -Wno-error. Это не оставляет "огрызков" вроде =return-type
+          find . -name "Makefile*" -type f -exec sed -i 's/-Werror=/-Wno-error=/g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/-Werror-/-Wno-error-/g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/ -Werror / -Wno-error /g' {} +
+          find . -name "Makefile*" -type f -exec sed -i 's/ -Werror$/ -Wno-error/g' {} +
 
       - name: 4.0 [MultiSU] Automated Setup with Log
         run: |
@@ -129,7 +128,7 @@ jobs:
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
             curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Ошибка синтаксиса в 3.0 исправлена, чекни лог компиляции." \
+              -F caption="❌ *Build Failed!* Проверь логи, но ошибки с флагами больше быть не должно." \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
             
