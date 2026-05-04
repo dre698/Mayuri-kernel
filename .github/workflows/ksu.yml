@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: VoidLine Kernel Rebirth
 # TARGET DEVICE: Blossom (Redmi 9C/9A)
-# VERSION: Vanilla Edition + KernelSU + MultiSU (Automated)
+# VERSION: Vanilla Edition + MultiSU (Automated)
 # AUTHOR: LineXin Development Team
 # ==============================================================================
 
@@ -16,7 +16,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   DEFCONFIG: blossom
-  ZIP_NAME: "VoidLine_Kernel_Rebirth-MultiSU_blossom.zip"
+  ZIP_NAME: "VoidLine_Kernel_Rebirth-ksu_blossom.zip"
   BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -43,39 +43,36 @@ jobs:
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: 3.0 [PATCHING] KernelSU & MultiSU Integration
+      - name: 3.0 [PATCHING] MultiSU Integration
         run: |
-         
-          # ИНТЕГРАЦИЯ MultiSU
           echo "Запуск скрипта MultiSU..."
-          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -[cite: 1]
+          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -
 
       - name: 4.0 [CONFIG] Generating & Fixing Config
         run: |
           mkdir -p out
-          export ARCH=arm64
-          export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
+          # Устанавливаем пути корректно
+          KPATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Генерируем базу
-          make O=out ${DEFCONFIG}_defconfig[cite: 1]
+          # Генерируем базу. Передаем ARCH напрямую в команду, чтобы избежать ошибок Makefile
+          PATH="$KPATH" make O=out ARCH=arm64 ${DEFCONFIG}_defconfig[cite: 1]
           
-          # КРИТИЧЕСКИЙ ФИКС: Авто-принятие новых опций от MultiSU/KSU
-          # Это предотвращает ошибку "End of file" в автоматической среде
-          make O=out ARCH=arm64 olddefconfig[cite: 1]
+          # Фикс интерактивных запросов (End of file error)
+          PATH="$KPATH" make O=out ARCH=arm64 olddefconfig[cite: 1]
           
-          # Твик варнингов
+          # Твик лимитов варнингов
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
 
       - name: 5.0 [BUILD] Compiling VoidLine Kernel
         run: |
           START_TIME=$(date +%s)
-          export ARCH=arm64
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
           set -o pipefail
           echo "Запуск компиляции..."
           
           make -j$(nproc --all) O=out \
+            ARCH=arm64 \
             CC=clang \
             HOSTCC=gcc \
             HOSTCXX=g++ \
@@ -93,7 +90,7 @@ jobs:
         if: success()
         run: |
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -z "$IMAGE" ]; then exit 1; fi
+          if [ -z "$IMAGE" ]; then echo "Ядро не найдено!"; exit 1; fi
           
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
@@ -102,7 +99,7 @@ jobs:
           cd ..
           echo "Z_MD5=$(md5sum ${{ env.ZIP_NAME }} | cut -d ' ' -f1)" >> $GITHUB_ENV
 
-      - name: 7.0 [REPORT] Success/Failure Telegram
+      - name: 7.0 [REPORT] Telegram Reporting
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
@@ -111,7 +108,13 @@ jobs:
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
-            [ -f build.log ] && curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-              -F caption="❌ *Build Failed!* Анализируй лог." \
-              "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+            # Если билд упал, отправляем лог. Если лога нет - просто текст.
+            if [ -f build.log ]; then
+              curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
+                -F caption="❌ *Build Failed!* Анализируй лог компиляции." \
+                "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
+            else
+              curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+                -d "chat_id=$CHAT_ID" -d "text=❌ *Critical Failure!* Сборка остановилась на этапе конфига или зависимостей."
+            fi
           fi
