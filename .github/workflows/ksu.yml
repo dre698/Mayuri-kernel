@@ -43,31 +43,33 @@ jobs:
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: 3.0 [PATCHING] Kernel Hooks & MultiSU Integration
+      - name: 3.0 [PATCHING] Manual Hook Injection & MultiSU
         run: |
-          echo "1. Внедряем ручные хуки для ядра 4.19..."
-          git clone --depth=1 https://github.com/MrGadget84/kernel_builder -b blossom ksu_build
-          for p in ksu_build/ksu/patches/4.19/*.patch; do
-            patch -p1 < "$p" || echo "Пропуск патча $p (возможно, уже применен)"
-          done
+          echo "1. Внедряем хуки вручную через sed (для ядер 4.19)..."
+          # Инъекция в fs/exec.c (критично для прохождения проверки Kbuild)
+          sed -i '/unshare_files()/i \    extern int ksu_handle_execveat(int *fd, struct filename **filename, int *flags);\n    ksu_handle_execveat(&fd, &filename, &flags);' fs/exec.c
           
+          # Инъекция в fs/open.c
+          sed -i '/do_sys_open(dfd, filename, flags, mode);/i \    extern int ksu_handle_openat(int *dfd, struct filename **filename, int *flags, umode_t *mode);\n    ksu_handle_openat(&dfd, &filename, &flags, &mode);' fs/open.c
+          
+          # Инъекция в fs/read_write.c
+          sed -i '/if (file->f_op->read)/i \    extern int ksu_handle_vfs_read(struct file **file_in, char __user **buf_in, size_t *count_in, loff_t **pos_in);\n    ksu_handle_vfs_read(&file, &buf, &count, &pos);' fs/read_write.c
+          
+          # Инъекция в fs/stat.c
+          sed -i '/vfs_statx(dfd, filename, flags, &stat, lookup_flags);/i \    extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);\n    ksu_handle_stat(&dfd, &filename, &flags);' fs/stat.c
+
           echo "2. Запуск скрипта MultiSU..."
           curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -
           
-          # Страховка от кривых переносов строк
           sed -i 's/\r$//' Makefile || true
 
       - name: 4.0 [CONFIG] Generating & Fixing Config
         run: |
           mkdir -p out
           export ARCH=arm64
-          # Возвращаем твой рабочий export
           export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Обычная генерация (без путей внутри make)
           make O=out ${DEFCONFIG}_defconfig
-          
-          # Авто-принятие новых функций от MultiSU
           make O=out olddefconfig
           
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
@@ -81,7 +83,6 @@ jobs:
           set -o pipefail
           echo "Запуск компиляции..."
           
-          # Возвращаем твою рабочую структуру переменных
           make -j$(nproc --all) O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -91,7 +92,7 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             LOCALVERSION="VKR-ksu_blossom" \
             KBUILD_WERROR=0 \
-            KCFLAGS="-Wno-unknown-warning-option" 2>&1 | tee build.log
+            KCFLAGS="-Wno-unknown-warning-option -DKSU_HOOKS" 2>&1 | tee build.log
             
           echo "B_TIME=$(($(date +%s) - $START_TIME))" >> $GITHUB_ENV
         continue-on-error: false
