@@ -47,45 +47,44 @@ jobs:
         run: |
           echo "Запуск скрипта MultiSU..."
           curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -
+          # Страховка: удаляем возможные кривые переносы строк (CRLF), которые мог занести скрипт
+          sed -i 's/\r$//' Makefile || true
 
       - name: 4.0 [CONFIG] Generating & Fixing Config
         run: |
           mkdir -p out
-          # Убираем все экспорты и передаем аргументы напрямую в make
-          # Это лечит "multiple target patterns" на 148 строке[cite: 1]
-          make O=out ARCH=arm64 \
-               CROSS_COMPILE=$PWD/gcc64/bin/aarch64-linux-android- \
-               CROSS_COMPILE_ARM32=$PWD/gcc/bin/arm-linux-androideabi- \
-               ${DEFCONFIG}_defconfig[cite: 1]
+          export ARCH=arm64
+          # Возвращаем твой рабочий export
+          export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
-          # Авто-принятие новых конфигов от MultiSU[cite: 1]
-          make O=out ARCH=arm64 \
-               CROSS_COMPILE=$PWD/gcc64/bin/aarch64-linux-android- \
-               CROSS_COMPILE_ARM32=$PWD/gcc/bin/arm-linux-androideabi- \
-               olddefconfig[cite: 1]
+          # Обычная генерация (без путей внутри make)
+          make O=out ${DEFCONFIG}_defconfig
+          
+          # Авто-принятие новых функций от MultiSU
+          make O=out olddefconfig
           
           sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
 
       - name: 5.0 [BUILD] Compiling VoidLine Kernel
         run: |
           START_TIME=$(date +%s)
-          # Добавляем clang в PATH только для этого шага
-          export PATH="$PWD/clang/bin:$PATH"
+          export ARCH=arm64
+          export PATH="$PWD/clang/bin:$PWD/gcc64/bin:$PWD/gcc/bin:$PATH"
           
           set -o pipefail
           echo "Запуск компиляции..."
           
+          # Возвращаем твою рабочую структуру переменных
           make -j$(nproc --all) O=out \
-            ARCH=arm64 \
             CC=clang \
             HOSTCC=gcc \
             HOSTCXX=g++ \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=$PWD/gcc64/bin/aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=$PWD/gcc/bin/arm-linux-androideabi- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             LOCALVERSION="VKR-ksu_blossom" \
             KBUILD_WERROR=0 \
-            KCFLAGS="-Wno-unknown-warning-option" 2>&1 | tee build.log[cite: 1]
+            KCFLAGS="-Wno-unknown-warning-option" 2>&1 | tee build.log
             
           echo "B_TIME=$(($(date +%s) - $START_TIME))" >> $GITHUB_ENV
         continue-on-error: false
@@ -94,7 +93,7 @@ jobs:
         if: success()
         run: |
           IMAGE=$(find out/arch/arm64/boot -name "Image.gz" -o -name "Image" | head -n 1)
-          if [ -z "$IMAGE" ]; then exit 1; fi
+          if [ -z "$IMAGE" ]; then echo "Ядро не найдено!"; exit 1; fi
           
           git clone --depth=1 https://github.com/LineXin/AnyKernel3_blossom ak3
           cp "$IMAGE" ak3/Image.gz
@@ -112,13 +111,12 @@ jobs:
               -F caption="$CAPTION" -F parse_mode=Markdown \
               "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
           else
-            # Отправляем лог только если он существует[cite: 1]
             if [ -f build.log ]; then
               curl -s -F chat_id="$CHAT_ID" -F document=@build.log \
-                -F caption="❌ *Build Failed!* См. лог." \
+                -F caption="❌ *Build Failed!* См. лог компиляции." \
                 "https://api.telegram.org/bot$BOT_TOKEN/sendDocument"
             else
               curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-                -d "chat_id=$CHAT_ID" -d "text=❌ *Critical Failure!* Ошибка до начала компиляции."
+                -d "chat_id=$CHAT_ID" -d "text=❌ *Critical Failure!* Ошибка до начала компиляции. Проверь логи Actions."
             fi
           fi
