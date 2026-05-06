@@ -43,11 +43,18 @@ jobs:
           git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 gcc
 
-      - name: 3.0 [PATCHING] MultiSU Integration
+      - name: 3.0 [PATCHING] Kernel Hooks & MultiSU Integration
         run: |
-          echo "Запуск скрипта MultiSU..."
+          echo "1. Внедряем ручные хуки для ядра 4.19..."
+          git clone --depth=1 https://github.com/MrGadget84/kernel_builder -b blossom ksu_build
+          for p in ksu_build/ksu/patches/4.19/*.patch; do
+            patch -p1 < "$p" || echo "Пропуск патча $p (возможно, уже применен)"
+          done
+          
+          echo "2. Запуск скрипта MultiSU..."
           curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -
-          # Страховка: удаляем возможные кривые переносы строк (CRLF), которые мог занести скрипт
+          
+          # Страховка от кривых переносов строк
           sed -i 's/\r$//' Makefile || true
 
       - name: 4.0 [CONFIG] Generating & Fixing Config
