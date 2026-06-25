@@ -494,18 +494,7 @@ jobs:
 
           else
 
-            FAIL_CAPTION=$(cat <<EOF
-❌ *Mayuri Kernel Build Failed*
-
-🌿 *Branch*
-\`${BUILD_BRANCH}\`
-
-🔨 *Commit*
-\`${BUILD_COMMIT}\`
-
-Please check build.log
-EOF
-)
+            FAIL_CAPTION=$(printf "❌ *Mayuri Kernel Build Failed*\n\n🌿 Branch: \`%s\`\n🔨 Commit: \`%s\`\n⚡ Compiler:\n\`%s\`\n\n🔐 KernelSU:\n\`%s (%s)\`\n\nPlease check build.log" "$BUILD_BRANCH" "$BUILD_COMMIT" "$COMPILER_VER" "$KSU_VERSION" "$KSU_TAG")
 
             for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
             do
