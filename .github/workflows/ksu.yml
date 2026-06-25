@@ -8,9 +8,6 @@
 name: VoidLine Kernel Rebirth ksu blossom
 
 on:
-  push:
-    branches:
-      - perf
   workflow_dispatch:
 
 env:
@@ -59,7 +56,7 @@ jobs:
           sed -i '/vfs_statx(dfd, filename, flags, &stat, lookup_flags);/i \    extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);\n    ksu_handle_stat(&dfd, &filename, &flags);' fs/stat.c
 
           echo "2. Запуск скрипта MultiSU..."
-          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/MultiSU/refs/heads/legacy/kernel/setup.sh" | bash -s legacy -
+          curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -s next-legacy
           
           sed -i 's/\r$//' Makefile || true
 
