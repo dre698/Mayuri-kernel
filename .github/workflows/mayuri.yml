@@ -1,0 +1,607 @@
+# ==============================================================================
+# PROJECT : Mayuri Kernel
+# DEVICE  : blossom (Redmi 9A / Redmi 9C)
+# AUTHOR  : dre698
+# ROOT    : KernelSU Next Legacy
+# COMPILER: crDroid Clang r428724
+# ==============================================================================
+
+name: Build Mayuri Kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_DEFCONFIG: blossom_defconfig
+  KERNEL_ARCH: arm64
+
+  KBUILD_BUILD_USER: dre698
+  KBUILD_BUILD_HOST: github-actions
+
+  CCACHE_DIR: /tmp/ccache
+
+  BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  PRIVATE_CHAT_ID: ${{ secrets.TELEGRAM_PRIVATE_CHAT_ID }}
+  GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
+
+jobs:
+  build:
+    name: Build Kernel & Package
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      ##########################################################################
+      ## Checkout
+      ##########################################################################
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      ##########################################################################
+      ## Cache
+      ##########################################################################
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ${{ runner.os }}-clang-r428724-${{ hashFiles('arch/arm64/configs/blossom_defconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-clang-r428724-
+            ${{ runner.os }}-
+
+      ##########################################################################
+      ## Install packages
+      ##########################################################################
+
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            bc \
+            bison \
+            flex \
+            build-essential \
+            git \
+            zip \
+            unzip \
+            curl \
+            wget \
+            rsync \
+            jq \
+            cpio \
+            kmod \
+            ca-certificates \
+            python3 \
+            python-is-python3 \
+            ccache \
+            libssl-dev \
+            libelf-dev \
+            libffi-dev \
+            zlib1g-dev \
+            libreadline-dev \
+            libsqlite3-dev \
+            libbz2-dev \
+            libncurses5-dev \
+            libgdbm-dev \
+            liblzma-dev \
+            tk-dev
+
+      ##########################################################################
+      ## Git
+      ##########################################################################
+
+      - name: Configure git
+        run: |
+          git config --global http.sslVerify false
+          git config --global url."https://".insteadOf git://
+
+      ##########################################################################
+      ## Clone crDroid Clang
+      ##########################################################################
+
+      - name: Clone crDroid Clang
+        run: |
+          until git clone \
+            --depth=1 \
+            https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
+            /tmp/clang
+          do
+            echo "Retrying clang clone..."
+            sleep 5
+          done
+
+      ##########################################################################
+      ## Clone GCC Toolchains
+      ##########################################################################
+
+      - name: Clone GCC ARM64
+        run: |
+          until git clone \
+            --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git \
+            /tmp/gcc-aarch64
+          do
+            echo "Retrying GCC64..."
+            sleep 5
+          done
+
+      - name: Clone GCC ARM32
+        run: |
+          until git clone \
+            --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git \
+            /tmp/gcc-arm
+          do
+            echo "Retrying GCC32..."
+            sleep 5
+          done
+
+      ##########################################################################
+      ## Verify toolchains
+      ##########################################################################
+
+      - name: Verify toolchains
+        run: |
+          echo "===== CLANG ====="
+          /tmp/clang/bin/clang --version
+
+          echo
+
+          echo "===== GCC64 ====="
+          /tmp/gcc-aarch64/bin/aarch64-linux-android-gcc --version
+
+          echo
+
+          echo "===== GCC32 ====="
+          /tmp/gcc-arm/bin/arm-linux-androideabi-gcc --version
+
+      ##########################################################################
+      ## Environment
+      ##########################################################################
+
+      - name: Export build environment
+        run: |
+          echo "/tmp/clang/bin" >> $GITHUB_PATH
+          echo "/tmp/gcc-aarch64/bin" >> $GITHUB_PATH
+          echo "/tmp/gcc-arm/bin" >> $GITHUB_PATH
+
+          echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+          echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+
+          echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+
+          echo "USE_CCACHE=1" >> $GITHUB_ENV
+
+      ##########################################################################
+      ## Clean source
+      ##########################################################################
+
+      - name: Clean source
+        run: |
+          chmod +x clean.sh || true
+
+          if [ -f clean.sh ]; then
+            ./clean.sh
+          else
+            make mrproper || true
+          fi
+          
+      ##########################################################################
+      ## KernelSU Next Legacy
+      ##########################################################################
+
+      - name: Integrate KernelSU Next Legacy
+        run: |
+          echo "Installing KernelSU Next Legacy..."
+
+          curl -LSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s legacy
+
+      ##########################################################################
+      ## KernelSU Version
+      ##########################################################################
+
+      - name: Get KernelSU Version
+        run: |
+          if [ -d KernelSU ]; then
+            KSU_GIT_VER=$(cd KernelSU && git rev-list --count HEAD)
+            KSU_VER=$((30000 + KSU_GIT_VER))
+            KSU_TAG=$(cd KernelSU && git describe --tags --always)
+
+            echo "KSU_VERSION=$KSU_VER" >> $GITHUB_ENV
+            echo "KSU_TAG=$KSU_TAG" >> $GITHUB_ENV
+
+            echo "KernelSU Version: $KSU_VER"
+            echo "KernelSU Tag: $KSU_TAG"
+          else
+            echo "KernelSU directory not found!"
+            exit 1
+          fi
+
+      ##########################################################################
+      ## Configure Kernel
+      ##########################################################################
+
+      - name: Configure kernel
+        run: |
+          mkdir -p out
+
+          make \
+            O=out \
+            ARCH=${KERNEL_ARCH} \
+            ${KERNEL_DEFCONFIG}
+
+          make \
+            O=out \
+            ARCH=${KERNEL_ARCH} \
+            olddefconfig
+
+      ##########################################################################
+      ## Build Information
+      ##########################################################################
+
+      - name: Collect build information
+        run: |
+
+          echo "BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+          echo "BUILD_BRANCH=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+          echo "BUILD_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+          echo "COMPILER_VER=$(/tmp/clang/bin/clang --version | head -1 | sed 's/ (.*//')" >> $GITHUB_ENV
+
+      ##########################################################################
+      ## Build Kernel
+      ##########################################################################
+
+      - name: Compile Kernel
+        run: |
+
+          START_TIME=$(date +%s)
+
+          export PATH="/tmp/clang/bin:/tmp/gcc-aarch64/bin:/tmp/gcc-arm/bin:$PATH"
+
+          export ARCH=${KERNEL_ARCH}
+          export SUBARCH=${KERNEL_ARCH}
+
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          export USE_CCACHE=1
+
+          ccache -M 10G
+          ccache -z
+
+          echo "===================================="
+          echo " Building Mayuri Kernel"
+          echo "===================================="
+
+          make -j$(nproc) \
+            O=out \
+            ARCH=${ARCH} \
+            CC=${CC} \
+            CLANG_TRIPLE=${CLANG_TRIPLE} \
+            CROSS_COMPILE=${CROSS_COMPILE} \
+            CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
+            KBUILD_BUILD_USER=${KBUILD_BUILD_USER} \
+            KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST} \
+            2>&1 | tee build.log
+
+          echo "B_TIME=$(($(date +%s)-START_TIME))" >> $GITHUB_ENV
+
+          ccache -s
+
+      ##########################################################################
+      ## Verify Build
+      ##########################################################################
+
+      - name: Verify kernel image
+        run: |
+
+          if [ -f out/arch/${KERNEL_ARCH}/boot/Image.gz-dtb ]; then
+              echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
+
+          elif [ -f out/arch/${KERNEL_ARCH}/boot/Image.gz ]; then
+              echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
+
+          elif [ -f out/arch/${KERNEL_ARCH}/boot/Image ]; then
+              echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
+
+          else
+              echo "Kernel image not found."
+
+              ls -lah out/arch/${KERNEL_ARCH}/boot/
+
+              exit 1
+          fi
+
+      ##########################################################################
+      ## Artifact Name
+      ##########################################################################
+
+      - name: Generate artifact name
+        run: |
+
+          ARTIFACT_NAME="Mayuri-KSUNext-${KSU_VERSION}-$(date +%y%m%d)-$(date +%H%M)-${GITHUB_SHA::8}"
+
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+          echo "Artifact: $ARTIFACT_NAME"
+
+      ##########################################################################
+      ## Clone AnyKernel3
+      ##########################################################################
+
+      - name: Clone AnyKernel3
+        run: |
+          until git clone \
+            --depth=1 \
+            https://github.com/dre698/AnyKernel3.git \
+            anykernel
+          do
+            echo "Retrying AnyKernel3 clone..."
+            sleep 5
+          done
+
+      ##########################################################################
+      ## Package AnyKernel3
+      ##########################################################################
+
+      - name: Package AnyKernel3
+        run: |
+
+          cd anykernel
+
+          rm -f Image Image.gz Image.gz-dtb
+          rm -f dtb*.img dtbo.img
+
+          cp ../out/arch/${KERNEL_ARCH}/boot/${KERNEL_IMAGE} .
+
+          if ls ../out/arch/${KERNEL_ARCH}/boot/dtb*.img >/dev/null 2>&1; then
+            cp ../out/arch/${KERNEL_ARCH}/boot/dtb*.img .
+          fi
+
+          if [ -f ../out/arch/${KERNEL_ARCH}/boot/dtbo.img ]; then
+            cp ../out/arch/${KERNEL_ARCH}/boot/dtbo.img .
+          fi
+
+          zip -r9 "../${ARTIFACT_NAME}.zip" * \
+            -x ".git*" \
+            -x "README.md" \
+            -x "*placeholder*"
+
+      ##########################################################################
+      ## Checksums
+      ##########################################################################
+
+      - name: Generate Checksums
+        run: |
+
+          MD5=$(md5sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+          SHA256=$(sha256sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+
+          echo "Z_MD5=$MD5" >> $GITHUB_ENV
+          echo "Z_SHA256=$SHA256" >> $GITHUB_ENV
+
+      ##########################################################################
+      ## Package Prebuilts
+      ##########################################################################
+
+      - name: Package Prebuilt Artifacts
+        run: |
+
+          mkdir -p prebuilt
+          mkdir -p prebuilt/modules
+          mkdir -p prebuilt/headers
+
+          cp out/arch/${KERNEL_ARCH}/boot/${KERNEL_IMAGE} prebuilt/kernel
+
+          if [ -f out/arch/${KERNEL_ARCH}/boot/dtb.img ]; then
+            cp out/arch/${KERNEL_ARCH}/boot/dtb.img prebuilt/
+          fi
+
+          if [ -f out/arch/${KERNEL_ARCH}/boot/dtbo.img ]; then
+            cp out/arch/${KERNEL_ARCH}/boot/dtbo.img prebuilt/
+          fi
+
+          find out -name "*.ko" -exec cp {} prebuilt/modules/ \; || true
+
+          if [ -d out/staging/usr/include ]; then
+            cp -r out/staging/usr/include prebuilt/headers/
+          elif [ -d usr/include ]; then
+            cp -r usr/include prebuilt/headers/
+          fi
+
+          cd prebuilt
+          zip -r9 "../${ARTIFACT_NAME}-prebuilts.zip" *
+
+      ##########################################################################
+      ## Upload AnyKernel ZIP
+      ##########################################################################
+
+      - name: Upload AnyKernel Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}.zip
+          retention-days: 30
+
+      ##########################################################################
+      ## Upload Prebuilts
+      ##########################################################################
+
+      - name: Upload Prebuilt Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-prebuilts
+          path: ${{ env.ARTIFACT_NAME }}-prebuilts.zip
+          retention-days: 30
+          
+      ##########################################################################
+      ## Upload Build Log
+      ##########################################################################
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ env.ARTIFACT_NAME }}
+          path: build.log
+          retention-days: 7
+
+      ##########################################################################
+      ## Telegram Notification
+      ##########################################################################
+
+      - name: Telegram Notification
+        if: always()
+        run: |
+
+          if [ "${{ job.status }}" == "success" ]; then
+
+            B_MIN=$((B_TIME / 60))
+            B_SEC=$((B_TIME % 60))
+
+            CAPTION=$(printf "✅ *Mayuri Kernel*\n\n⏱ Build: %sm %ss\n🌿 Branch: \`%s\`\n🔨 Commit: \`%s\`\n⚡ Compiler:\n\`%s\`\n\n🔐 KernelSU:\n\`%s (%s)\`\n\nMD5:\n\`%s\`\n\nSHA256:\n\`%s\`" "$B_MIN" "$B_SEC" "$BUILD_BRANCH" "$BUILD_COMMIT" "$COMPILER_VER" "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
+
+            for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+            do
+              curl -s \
+                -F chat_id="$CHAT" \
+                -F document=@"${ARTIFACT_NAME}.zip" \
+                -F caption="$CAPTION" \
+                -F parse_mode=Markdown \
+                "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            done
+
+          else
+
+            FAIL_CAPTION=$(cat <<EOF
+❌ *Mayuri Kernel Build Failed*
+
+🌿 *Branch*
+\`${BUILD_BRANCH}\`
+
+🔨 *Commit*
+\`${BUILD_COMMIT}\`
+
+Please check build.log
+EOF
+)
+
+            for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+            do
+              curl -s \
+                -F chat_id="$CHAT" \
+                -F document=@build.log \
+                -F caption="$FAIL_CAPTION" \
+                -F parse_mode=Markdown \
+                "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+            done
+
+          fi
+
+      ##########################################################################
+      ## GitHub Actions Summary
+      ##########################################################################
+
+      - name: Build Summary
+        if: always()
+        run: |
+
+          {
+            echo "# 🌸 Mayuri Kernel"
+            echo
+
+            echo "## Build Information"
+            echo
+
+            echo "| Item | Value |"
+            echo "|------|-------|"
+
+            echo "| Status | ${{ job.status }} |"
+            echo "| Branch | ${BUILD_BRANCH} |"
+            echo "| Commit | ${BUILD_COMMIT} |"
+            echo "| Compiler | ${COMPILER_VER} |"
+            echo "| KernelSU | ${KSU_VERSION} |"
+
+            if [ "${{ job.status }}" == "success" ]; then
+
+              echo "| Build Time | ${B_TIME}s |"
+              echo "| MD5 | ${Z_MD5} |"
+              echo "| SHA256 | ${Z_SHA256} |"
+              echo "| Artifact | ${ARTIFACT_NAME}.zip |"
+
+            fi
+
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+      ##########################################################################
+      ## Cleanup
+      ##########################################################################
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning temporary files..."
+
+          rm -rf anykernel || true
+          rm -rf prebuilt || true
+
+          ccache -s || true
+
+      ##########################################################################
+      ## Final Build Information
+      ##########################################################################
+
+      - name: Final Information
+        if: always()
+        run: |
+
+          echo
+          echo "==============================================="
+          echo "            MAYURI KERNEL BUILD"
+          echo "==============================================="
+
+          echo "Status      : ${{ job.status }}"
+          echo "Branch      : ${BUILD_BRANCH}"
+          echo "Commit      : ${BUILD_COMMIT}"
+          echo "Compiler    : ${COMPILER_VER}"
+
+          if [ "${{ job.status }}" == "success" ]; then
+
+            echo "KernelSU    : ${KSU_VERSION}"
+            echo "Artifact    : ${ARTIFACT_NAME}.zip"
+            echo "MD5         : ${Z_MD5}"
+            echo "SHA256      : ${Z_SHA256}"
+
+          fi
+
+          echo "==============================================="
+
+      ##########################################################################
+      ## Finish
+      ##########################################################################
+
+      - name: Finish Workflow
+        if: always()
+        run: |
+          echo "Workflow finished."
