@@ -1,4 +1,4 @@
-name: Mayuri Kernel Production CI (Zero Failure)
+name : Mayuri Kernel Production CI (idk)
 
 on:
   workflow_dispatch:
