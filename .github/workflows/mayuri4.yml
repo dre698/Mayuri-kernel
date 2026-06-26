@@ -22,170 +22,456 @@ jobs:
 
     steps:
 
+    # ==========================================================
+    # Checkout
+    # ==========================================================
+
     - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
 
+    # ==========================================================
+    # Dependencies
+    # ==========================================================
+
     - name: Install dependencies
       run: |
         sudo apt-get update
+
         sudo apt-get install -y \
-          bc bison flex build-essential git zip curl wget ccache \
-          libssl-dev libelf-dev cpio kmod jq
+          bc \
+          bison \
+          flex \
+          build-essential \
+          git \
+          zip \
+          curl \
+          wget \
+          jq \
+          ccache \
+          libssl-dev \
+          libelf-dev \
+          cpio \
+          kmod
+
+    # ==========================================================
+    # ccache
+    # ==========================================================
 
     - name: Setup ccache
       run: |
-        ccache --max-size=2G
-        ccache -z
+        mkdir -p "$CCACHE_DIR"
 
-    - name: Clang toolchain
+        ccache --set-config=cache_dir="$CCACHE_DIR"
+        ccache --max-size=2G
+        ccache --zero-stats
+
+    # ==========================================================
+    # Clang
+    # ==========================================================
+
+    - name: Download Clang
       run: |
         git clone --depth=1 \
           https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
           /tmp/clang
 
-    - name: Setup environment (SAFE CLANG ONLY)
+    # ==========================================================
+    # Environment
+    # ==========================================================
+
+    - name: Setup build environment
       run: |
         echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
         echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
 
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
+        echo "CC=ccache clang" >> $GITHUB_ENV
+
         echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
-        echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
 
-    - name: Auto Device Detect
+        echo "/tmp/clang/bin" >> $GITHUB_PATH
+
+    # ==========================================================
+    # Auto Device Detect
+    # ==========================================================
+
+    - name: Detect Device
       run: |
-        DEVICE=$(grep -Ril "blossom\|mt" arch/arm64/boot/dts | head -n 1 | xargs basename | sed 's/.dts//')
-        [ -z "$DEVICE" ] && DEVICE="blossom"
+
+        DEVICE="blossom"
+
+        if grep -q "^CONFIG_ARCH_MT6765=y" arch/arm64/configs/${KERNEL_DEFCONFIG}; then
+          DEVICE="blossom"
+        fi
+
         echo "DEVICE_TREE=$DEVICE" >> $GITHUB_ENV
-        echo "Detected: $DEVICE"
+
+        echo "Detected device : $DEVICE"
+
+    # ==========================================================
+    # Telegram Init
+    # ==========================================================
 
     - name: Telegram Init
       run: |
-        RESP=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-          -d chat_id="${PRIVATE_CHAT_ID}" \
-          -d text="🚀 Mayuri Kernel CI started (Stable+)")
 
-        echo "TG_MSG_ID=$(echo $RESP | jq -r '.result.message_id')" >> $GITHUB_ENV
+        RESP=$(curl -s \
+          -X POST \
+          "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d text="🚀 Mayuri Kernel CI Started (Stable+)")
+
+        echo "TG_MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')" >> $GITHUB_ENV
+
+    - name: Telegram Progress
+      run: |
+        curl -s \
+          -X POST \
+          "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d message_id="${TG_MSG_ID}" \
+          -d text="⚙️ Preparing build environment..."
+          
+    # ==========================================================
+    # KernelSU
+    # ==========================================================
+
+    - name: Clone KernelSU-Next
+      run: |
+        rm -rf KernelSU KernelSU-Next
+
+        git clone --depth=1 \
+          https://github.com/KernelSU-Next/KernelSU-Next.git \
+          KernelSU
+
+    - name: Detect KernelSU Version
+      run: |
+        cd KernelSU
+
+        COUNT=$(git rev-list --count HEAD)
+        TAG=$(git describe --tags --always)
+
+        KSU_VERSION=$((30000 + COUNT))
+
+        echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+        echo "KSU_TAG=$TAG" >> $GITHUB_ENV
+
+        echo "KernelSU Version : $KSU_VERSION"
+        echo "KernelSU Tag     : $KSU_TAG"
+
+    - name: Integrate KernelSU
+      run: |
+        bash KernelSU/kernel/setup.sh legacy
+
+    # ==========================================================
+    # Clean
+    # ==========================================================
 
     - name: Clean source
-      run: make mrproper || true
+      run: |
+        make mrproper || true
+
+        mkdir -p out
+
+    # ==========================================================
+    # Configure
+    # ==========================================================
 
     - name: Configure kernel
       run: |
-        mkdir -p out
-        make O=out ARCH=$ARCH $KERNEL_DEFCONFIG
-        make O=out ARCH=$ARCH olddefconfig
+        make \
+          O=out \
+          ARCH=$ARCH \
+          $KERNEL_DEFCONFIG
 
-    - name: KernelSU Integration (SAFE FALLBACK)
+        make \
+          O=out \
+          ARCH=$ARCH \
+          olddefconfig
+
+    # ==========================================================
+    # Build
+    # ==========================================================
+
+    - name: Build kernel (Retry x2)
       run: |
-        rm -rf KernelSU
-
-        if git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU; then
-          echo "KSU=Next"
-        elif git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU; then
-          echo "KSU=ReSukiSU"
-        else
-          git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU || true
-        fi
-
-        bash KernelSU/kernel/setup.sh legacy || true
-
-    - name: Build kernel (retry x2)
-      run: |
-        build() {
+        build_kernel() {
           START=$(date +%s)
 
-          make -j$(nproc) O=out ARCH=$ARCH \
-            CC=clang \
+          make -j"$(nproc)" \
+            O=out \
+            ARCH=$ARCH \
+            CC="$CC" \
             CLANG_TRIPLE=$CLANG_TRIPLE \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            KBUILD_BUILD_USER=$KBUILD_BUILD_USER \
+            KBUILD_BUILD_HOST=$KBUILD_BUILD_HOST \
             2>&1 | tee build.log
 
-          echo "B_TIME=$(($(date +%s)-START))" >> $GITHUB_ENV
+          BUILD_RESULT=${PIPESTATUS[0]}
+
+          END=$(date +%s)
+
+          echo "B_TIME=$((END-START))" >> $GITHUB_ENV
+
+          return $BUILD_RESULT
         }
 
-        build || build
+        echo "========== BUILD ATTEMPT #1 =========="
+
+        build_kernel
+
+        if [ $? -ne 0 ]; then
+          echo "First build failed, retrying..."
+
+          sleep 5
+
+          echo "========== BUILD ATTEMPT #2 =========="
+
+          build_kernel
+        fi
+
+    # ==========================================================
+    # Detect Kernel Image
+    # ==========================================================
 
     - name: Detect Image
       run: |
-        if [ -f out/arch/$ARCH/boot/Image.gz-dtb ]; then
-          echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
-        elif [ -f out/arch/$ARCH/boot/Image.gz ]; then
-          echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
+        IMAGE_DIR="out/arch/$ARCH/boot"
+
+        if [ -f "$IMAGE_DIR/Image.gz-dtb" ]; then
+          IMAGE="Image.gz-dtb"
+        elif [ -f "$IMAGE_DIR/Image.gz" ]; then
+          IMAGE="Image.gz"
+        elif [ -f "$IMAGE_DIR/Image" ]; then
+          IMAGE="Image"
         else
-          echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
+          echo "::error::Kernel image not found"
+          exit 1
         fi
+
+        echo "KERNEL_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+        echo "Kernel image : $IMAGE"
+
+    # ==========================================================
+    # Build Statistics
+    # ==========================================================
+
+    - name: Build Statistics
+      if: always()
+      run: |
+        echo "========== BUILD STATS =========="
+
+        ccache -s || true
+
+        echo
+        echo "Compiler:"
+        clang --version | head -1
+
+        echo
+        echo "CPU:"
+        nproc
+        
+    # ==========================================================
+    # Artifact Name
+    # ==========================================================
 
     - name: Artifact name
       run: |
         DATE=$(date +%y%m%d)
         TIME=$(date +%H%M)
-        
+
         echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-ksn${KSU_VERSION}-${DATE}-${TIME}-${GITHUB_SHA::9}" >> $GITHUB_ENV
-        
+
+        echo "Artifact : Mayuri-${DEVICE_TREE}-ksn${KSU_VERSION}-${DATE}-${TIME}-${GITHUB_SHA::9}.zip"
+
+    # ==========================================================
+    # Package AnyKernel3
+    # ==========================================================
+
     - name: Package AnyKernel3
       run: |
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-        cp out/arch/$ARCH/boot/$KERNEL_IMAGE anykernel/
-        cd anykernel
-        zip -r9 ../${ARTIFACT_NAME}.zip . -x "*.git*" "*README*"
+        rm -rf anykernel
 
-    - name: Hash
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+
+        cp out/arch/$ARCH/boot/$KERNEL_IMAGE anykernel/
+
+        cd anykernel
+
+        zip -r9 "../${ARTIFACT_NAME}.zip" . \
+          -x "*.git*" \
+          -x "*README*" \
+          -x "*.github*"
+
+        cd ..
+
+        ls -lh "${ARTIFACT_NAME}.zip"
+
+    # ==========================================================
+    # Checksums
+    # ==========================================================
+
+    - name: Generate Hash
       run: |
-        echo "Z_MD5=$(md5sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
-        echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
+        MD5=$(md5sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+        SHA256=$(sha256sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+
+        echo "Z_MD5=$MD5" >> $GITHUB_ENV
+        echo "Z_SHA256=$SHA256" >> $GITHUB_ENV
+
+        echo "MD5    : $MD5"
+        echo "SHA256 : $SHA256"
+
+    # ==========================================================
+    # Upload Artifact
+    # ==========================================================
+
+    - name: Upload Artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ env.ARTIFACT_NAME }}.zip
+        compression-level: 0
+        
+    # ==========================================================
+    # Telegram Progress
+    # ==========================================================
+
+    - name: Telegram Progress (Packaging)
+      if: success()
+      run: |
+        curl -s \
+          -X POST \
+          "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d message_id="${TG_MSG_ID}" \
+          -d text="📦 Packaging kernel..."
 
     - name: Telegram Send
       if: always()
       run: |
         set +e
 
+        B_TIME=${B_TIME:-0}
         B_MIN=$((B_TIME / 60))
         B_SEC=$((B_TIME % 60))
+
+        COMPILER=$(clang --version | head -1)
 
         KSU_VERSION=${KSU_VERSION:-unknown}
         KSU_TAG=${KSU_TAG:-unknown}
 
         if [ "${{ job.status }}" = "success" ]; then
 
-          CAPTION=$(printf "✅ Mayuri Kernel\n\nDevice: %s\nBuild: %sm %ss\nBranch: %s\nCommit: %s\n\nKSU: %s (%s)\n\nMD5: %s\nSHA256: %s" \
-            "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" \
-            "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
+          CAPTION=$(printf "✅ *Mayuri Kernel*\n\n📱 Device : %s\n⏱ Build : %sm %ss\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n⚙️ Compiler :\n\`%s\`\n\n🔐 KernelSU :\n\`%s (%s)\`\n\n📦 MD5 :\n\`%s\`\n\n🔎 SHA256 :\n\`%s\`" "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$COMPILER" "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
 
-          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s -F chat_id="$CHAT" \
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+          do
+            curl -s \
+              --retry 3 \
+              --retry-delay 2 \
+              -F chat_id="$CHAT" \
               -F document=@"${ARTIFACT_NAME}.zip" \
               -F caption="$CAPTION" \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           done
 
+          curl -s \
+            -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d chat_id="${PRIVATE_CHAT_ID}" \
+            -d message_id="${TG_MSG_ID}" \
+            -d text="✅ Build finished successfully."
+
         else
-          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s -F chat_id="$CHAT" \
+
+          FAIL_CAPTION=$(printf "❌ *Mayuri Kernel Build Failed*\n\n📱 Device : %s\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n📄 build.log attached." "$DEVICE_TREE" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}")
+
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+          do
+            curl -s \
+              --retry 3 \
+              --retry-delay 2 \
+              -F chat_id="$CHAT" \
               -F document=@build.log \
-              -F caption="❌ Mayuri Kernel failed\nDevice: $DEVICE_TREE\nCommit: ${GITHUB_SHA::7}" \
+              -F caption="$FAIL_CAPTION" \
+              -F parse_mode=Markdown \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           done
-        fi
 
-    - name: Summary
+          curl -s \
+            -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d chat_id="${PRIVATE_CHAT_ID}" \
+            -d message_id="${TG_MSG_ID}" \
+            -d text="❌ Build failed."
+        fi
+        
+    # ==========================================================
+    # GitHub Summary
+    # ==========================================================
+
+    - name: Build Summary
       if: always()
       run: |
+        COMPILER=$(clang --version | head -1)
+
         {
-          echo "# Mayuri Kernel (Stable+)"
-          echo "| Status | ${{ job.status }} |"
+          echo "# ======================================================================"
+          echo "# PROJECT : Mayuri Kernel"
+          echo "# DEVICE  : ${DEVICE_TREE}"
+          echo "# STATUS  : ${{ job.status }}"
+          echo "# ======================================================================"
+          echo
+
+          echo "## Build Information"
+          echo
+          echo "| Key | Value |"
+          echo "|-----|-------|"
           echo "| Device | ${DEVICE_TREE} |"
+          echo "| Branch | ${GITHUB_REF_NAME} |"
           echo "| Commit | ${GITHUB_SHA::7} |"
-          echo "| Build time | ${B_TIME}s |"
-          echo "| Artifact | ${ARTIFACT_NAME}.zip |"
-        } >> $GITHUB_STEP_SUMMARY
+          echo "| Compiler | ${COMPILER} |"
+          echo "| KernelSU | ${KSU_VERSION:-unknown} (${KSU_TAG:-unknown}) |"
+          echo "| Build Time | ${B_TIME:-0}s |"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "| MD5 | ${Z_MD5} |"
+            echo "| SHA256 | ${Z_SHA256} |"
+            echo "| Artifact | ${ARTIFACT_NAME}.zip |"
+          fi
+
+          echo
+          echo "## ccache Statistics"
+          echo
+          echo '```'
+          ccache -s || true
+          echo '```'
+
+          echo
+          echo "======================================================================"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # ==========================================================
+    # Cleanup
+    # ==========================================================
 
     - name: Cleanup
       if: always()
       run: |
+        rm -rf anykernel KernelSU
+
         ccache -s || true
+
+        echo "Cleanup finished."
