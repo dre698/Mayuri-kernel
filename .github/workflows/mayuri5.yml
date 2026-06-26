@@ -1,0 +1,135 @@
+name: Mayuri Kernel Production CI (?)
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_DEFCONFIG: blossom_defconfig
+  KERNEL_ARCH: arm64
+  KBUILD_BUILD_USER: dre698
+  KBUILD_BUILD_HOST: github-actions
+
+  USE_CCACHE: 1
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+  BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  PRIVATE_CHAT_ID: ${{ secrets.TELEGRAM_PRIVATE_CHAT_ID }}
+  GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison flex build-essential git zip curl wget jq ccache libssl-dev libelf-dev cpio kmod
+
+    - name: Setup ccache
+      run: |
+        mkdir -p "$CCACHE_DIR"
+        ccache --set-config=cache_dir="$CCACHE_DIR"
+        ccache --max-size=2G
+        ccache --zero-stats
+
+    # ==========================================================
+    # CLANG
+    # ==========================================================
+    - name: Download Clang
+      run: |
+        git clone --depth=1 \
+          https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
+          /tmp/clang
+
+    - name: Verify Clang
+      run: |
+        /tmp/clang/bin/clang --version
+
+    # ==========================================================
+    # CLEAN ENV (ANTI LEAK - FIX UTAMA KAMU)
+    # ==========================================================
+    - name: Clean environment (NO LEAK FIX)
+      run: |
+        unset CFLAGS
+        unset CXXFLAGS
+        unset KCFLAGS
+        unset CPPFLAGS
+        unset LDFLAGS
+        unset ASFLAGS
+
+        echo "HOSTCC=gcc" >> $GITHUB_ENV
+        echo "HOSTCXX=g++" >> $GITHUB_ENV
+
+    # ==========================================================
+    # BUILD ENV
+    # ==========================================================
+    - name: Setup build environment
+      run: |
+        echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+        echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+
+        echo "CC=/tmp/clang/bin/clang" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+
+        echo "CROSS_COMPILE=" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
+
+        echo "/tmp/clang/bin" >> $GITHUB_PATH
+
+    # ==========================================================
+    # CLEAN SOURCE
+    # ==========================================================
+    - name: Clean source
+      run: |
+        make mrproper || true
+        mkdir -p out
+
+    # ==========================================================
+    # CONFIG
+    # ==========================================================
+    - name: Configure kernel
+      run: |
+        make O=out ARCH=$ARCH $KERNEL_DEFCONFIG
+        make O=out ARCH=$ARCH olddefconfig
+
+    # ==========================================================
+    # DEBUG (OPTIONAL)
+    # ==========================================================
+    - name: Debug config
+      run: |
+        grep -E "CONFIG_CC_IS_CLANG|CONFIG_LTO|CONFIG_CLANG_VERSION" out/.config || true
+
+    # ==========================================================
+    # BUILD (NO LEAK SAFE)
+    # ==========================================================
+    - name: Build kernel
+      run: |
+        set -e
+
+        make -j$(nproc) \
+          O=out \
+          ARCH=$ARCH \
+          CC=/tmp/clang/bin/clang \
+          HOSTCC=gcc \
+          HOSTCXX=g++ \
+          CLANG_TRIPLE=$CLANG_TRIPLE \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          KBUILD_BUILD_USER=$KBUILD_BUILD_USER \
+          KBUILD_BUILD_HOST=$KBUILD_BUILD_HOST
+
+    # ==========================================================
+    # ARTIFACT
+    # ==========================================================
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mayuri-kernel
+        path: out/arch/arm64/boot/*
