@@ -54,7 +54,7 @@ jobs:
     - name: Download Clang 15.0.7
       run: |
         git clone --depth=1 \
-          https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r450784d.git \
+          https://gitlab.com/tejassinggh/clang-r450784d.git \
           /tmp/clang
 
         /tmp/clang/bin/clang --version
