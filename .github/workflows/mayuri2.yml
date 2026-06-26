@@ -1,3 +1,10 @@
+# ==============================================================================
+# PROJECT : Mayuri Kernel
+# DEVICE  : Auto Detect
+# AUTHOR  : dre698
+# BUILD   : Production CI
+# ==============================================================================
+
 name: Mayuri Kernel Production CI
 
 on:
@@ -24,6 +31,8 @@ jobs:
     # =========================
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
 
     # =========================
     # Dependencies
@@ -40,35 +49,43 @@ jobs:
     # =========================
     - name: Clang toolchain
       run: |
-        git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git /tmp/clang
+        git clone --depth=1 \
+          https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
+          /tmp/clang
 
     # =========================
-    # Env setup
+    # Environment
     # =========================
     - name: Setup environment
       run: |
         echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
         echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+
         echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
         echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
+
+        echo "BUILD_BRANCH=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+        echo "BUILD_COMMIT=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+        echo "/tmp/clang/bin:$PATH" >> $GITHUB_PATH
 
     # =========================
     # Clean
     # =========================
     - name: Clean source
-      run: make mrproper || true
+      run: |
+        make mrproper || true
 
     # =========================
-    # Device Tree Auto Detect (SAFE)
+    # Device Tree Auto Detect
     # =========================
     - name: Detect Device Tree
       run: |
         DTS_DIR="arch/${KERNEL_ARCH}/boot/dts"
 
         DEVICE=$(find "$DTS_DIR" -name "*.dts" 2>/dev/null \
-          | grep -i "blossom\|mt" \
+          | grep -Ei "blossom|mt" \
           | head -n 1 \
           | xargs basename 2>/dev/null \
           | sed 's/.dts//')
@@ -81,7 +98,7 @@ jobs:
         echo "Detected device: $DEVICE"
 
     # =========================
-    # KernelSU AUTO (Next / ReSukiSU / Legacy)
+    # KernelSU Auto
     # =========================
     - name: KernelSU Integration
       run: |
@@ -102,7 +119,7 @@ jobs:
         fi
 
     # =========================
-    # KernelSU version
+    # KernelSU Version
     # =========================
     - name: KernelSU version
       run: |
@@ -125,11 +142,13 @@ jobs:
         make O=out ARCH=${ARCH} olddefconfig
 
     # =========================
-    # Build kernel
+    # Build
     # =========================
     - name: Build kernel
       run: |
         START=$(date +%s)
+
+        export PATH="/tmp/clang/bin:$PATH"
 
         make -j$(nproc) O=out ARCH=${ARCH} \
           CC=clang \
@@ -160,7 +179,7 @@ jobs:
     # =========================
     - name: Artifact name
       run: |
-        echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-KSU${KSU_VERSION}-${GITHUB_SHA::7}" >> $GITHUB_ENV
+        echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-KSU${KSU_VERSION}-${BUILD_COMMIT}" >> $GITHUB_ENV
 
     # =========================
     # AnyKernel
@@ -183,31 +202,86 @@ jobs:
         echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
 
     # =========================
-    # Telegram (PRIVATE + GROUP SAFE)
+    # Telegram (PRIVATE + GROUP)
     # =========================
-    - name: Telegram notify
+    - name: Telegram Notification
       if: always()
       run: |
         set +e
 
-        TARGETS=("$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID")
+        B_MIN=$((B_TIME / 60))
+        B_SEC=$((B_TIME % 60))
+
+        COMPILER_VER=$(/tmp/clang/bin/clang --version | head -1)
 
         if [ "${{ job.status }}" = "success" ]; then
 
-          for CHAT in "${TARGETS[@]}"; do
+          CAPTION=$(printf "✅ *Mayuri Kernel*\n\n📱 Device : %s\n⏱ Build : %sm %ss\n🌿 Branch : `%s`\n🔨 Commit : `%s`\n\n⚙️ Compiler :\n`%s`\n\n🔐 KernelSU :\n`%s (%s)`\n\n📦 MD5 :\n`%s`\n\n🔎 SHA256 :\n`%s`" "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$BUILD_BRANCH" "$BUILD_COMMIT" "$COMPILER_VER" "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
+
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+          do
             curl -s -F chat_id="$CHAT" \
-              -F document=@${ARTIFACT_NAME}.zip \
-              -F caption="Mayuri Kernel OK | ${DEVICE_TREE} | KSU ${KSU_VERSION}" \
+              -F document=@"${ARTIFACT_NAME}.zip" \
+              -F caption="$CAPTION" \
+              -F parse_mode=Markdown \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           done
 
         else
 
-          for CHAT in "${TARGETS[@]}"; do
+          FAIL_CAPTION=$(printf "❌ *Mayuri Kernel Build Failed*\n\n📱 Device : %s\n🌿 Branch : `%s`\n🔨 Commit : `%s`\n\n⚙️ Compiler :\n`%s`\n\n🔐 KernelSU :\n`%s (%s)`\n\n📄 Check build.log" "$DEVICE_TREE" "$BUILD_BRANCH" "$BUILD_COMMIT" "$COMPILER_VER" "$KSU_VERSION" "$KSU_TAG")
+
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+          do
             curl -s -F chat_id="$CHAT" \
               -F document=@build.log \
-              -F caption="BUILD FAILED | ${DEVICE_TREE}" \
+              -F caption="$FAIL_CAPTION" \
+              -F parse_mode=Markdown \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           done
 
         fi
+
+    # =========================
+    # GitHub Summary
+    # =========================
+    - name: Build Summary
+      if: always()
+      run: |
+
+        {
+          echo "# ======================================================================"
+          echo "# PROJECT : Mayuri Kernel"
+          echo "# DEVICE  : ${DEVICE_TREE}"
+          echo "# STATUS  : ${{ job.status }}"
+          echo "# ======================================================================"
+          echo
+
+          echo "## Build Information"
+          echo
+          echo "| Key | Value |"
+          echo "|-----|-------|"
+          echo "| Branch | ${BUILD_BRANCH} |"
+          echo "| Commit | ${BUILD_COMMIT} |"
+          echo "| Compiler | ${COMPILER_VER} |"
+          echo "| KernelSU | ${KSU_VERSION} (${KSU_TAG}) |"
+          echo "| Build Time | ${B_TIME}s |"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "| MD5 | ${Z_MD5} |"
+            echo "| SHA256 | ${Z_SHA256} |"
+            echo "| Artifact | ${ARTIFACT_NAME}.zip |"
+          fi
+
+          echo
+          echo "======================================================================"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # =========================
+    # Cleanup
+    # =========================
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -rf anykernel || true
+        ccache -s || true
