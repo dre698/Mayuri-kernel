@@ -20,12 +20,10 @@ jobs:
     steps:
 
     # =========================
-    # Checkout (SAFE)
+    # Checkout
     # =========================
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
     # =========================
     # Dependencies
@@ -34,117 +32,124 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          bc bison flex build-essential git zip curl wget \
-          cpio kmod libssl-dev libelf-dev ccache python3
+          bc bison flex build-essential git zip curl wget ccache \
+          libssl-dev libelf-dev cpio kmod
 
     # =========================
-    # Clang (retry safe)
+    # Clang (FIX TOOLCHAIN)
     # =========================
     - name: Clang toolchain
       run: |
-        for i in 1 2 3; do
-          git clone --depth=1 \
-            https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
-            /tmp/clang && break || sleep 3
-        done
+        git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git /tmp/clang
 
     # =========================
-    # ENV FIX (IMPORTANT)
+    # Environment FIX (CRITICAL)
     # =========================
-    - name: Setup env
+    - name: Setup environment
       run: |
         echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
         echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
 
-        echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
-
-        # IMPORTANT FIX: remove broken gcc requirement
+        # FIX ERROR: missing gcc stub (avoid kernel scripts calling gcc)
+        echo "CC=clang" >> $GITHUB_ENV
         echo "CROSS_COMPILE=" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
-
-        echo "CC=clang" >> $GITHUB_ENV
         echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+
+        echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
 
     # =========================
     # Clean
     # =========================
-    - name: Clean
+    - name: Clean source
       run: make mrproper || true
 
     # =========================
-    # Configure (non-interactive FIX)
+    # Configure FIX (no interactive prompt crash)
     # =========================
     - name: Configure kernel
       run: |
         mkdir -p out
-
-        yes "" | make O=out ARCH=${ARCH} ${KERNEL_DEFCONFIG} || true
+        make O=out ARCH=${ARCH} ${KERNEL_DEFCONFIG} || exit 1
         yes "" | make O=out ARCH=${ARCH} olddefconfig
 
     # =========================
-    # KernelSU
+    # KernelSU (stable fallback)
     # =========================
-    - name: KernelSU
+    - name: KernelSU Integration
       run: |
         rm -rf KernelSU
 
-        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU \
-        || git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
+        if git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU; then
+          echo "KernelSU Next"
+        elif git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU; then
+          echo "ReSukiSU"
+        else
+          git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
+        fi
 
         bash KernelSU/kernel/setup.sh legacy || true
 
     # =========================
-    # Build
+    # KernelSU version
+    # =========================
+    - name: KernelSU version
+      run: |
+        KSU_GIT=$(cd KernelSU && git rev-list --count HEAD || echo 0)
+        echo "KSU_VERSION=$((30000 + KSU_GIT))" >> $GITHUB_ENV
+        echo "KSU_TAG=$(cd KernelSU && git describe --tags --always)" >> $GITHUB_ENV
+
+    # =========================
+    # Build kernel
     # =========================
     - name: Build kernel
       run: |
-        set +e
         START=$(date +%s)
 
-        export PATH="/tmp/clang/bin:$PATH"
-        export ARCH=${ARCH}
-        export SUBARCH=${ARCH}
-
         make -j$(nproc) O=out \
+          ARCH=${ARCH} \
           CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          LLVM=1 LLVM_IAS=1 \
-          2>&1 | tee build.log
+          CLANG_TRIPLE=${CLANG_TRIPLE} \
+          KBUILD_BUILD_USER=${KBUILD_BUILD_USER} \
+          KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST} \
+          2>&1 | tee build.log || true
 
         echo "B_TIME=$(($(date +%s)-START))" >> $GITHUB_ENV
 
     # =========================
-    # Detect Image (SAFE)
+    # Detect image (SAFE)
     # =========================
-    - name: Detect image
+    - name: Detect kernel image
       run: |
         if [ -f out/arch/${ARCH}/boot/Image.gz-dtb ]; then
           echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
         elif [ -f out/arch/${ARCH}/boot/Image.gz ]; then
           echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
-        else
+        elif [ -f out/arch/${ARCH}/boot/Image ]; then
           echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
+        else
+          echo "NO_KERNEL_IMAGE"
+          exit 1
         fi
 
     # =========================
-    # Artifact
+    # Artifact name
     # =========================
     - name: Artifact name
       run: |
         echo "ARTIFACT_NAME=Mayuri-${GITHUB_SHA::7}" >> $GITHUB_ENV
 
     # =========================
-    # AnyKernel (FIX missing file)
+    # AnyKernel FIX (missing file issue fixed)
     # =========================
-    - name: Package
+    - name: Package AnyKernel3
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
         cd anykernel
 
         cp ../out/arch/${ARCH}/boot/${KERNEL_IMAGE} ./ || exit 1
 
-        zip -r9 ../${ARTIFACT_NAME}.zip . \
-          -x "*.git*" "*README*"
+        zip -r9 ../${ARTIFACT_NAME}.zip . -x "*.git*" "*README*"
 
     # =========================
     # Hash
@@ -155,7 +160,7 @@ jobs:
         echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
 
     # =========================
-    # TELEGRAM (UNCHANGED FORMAT)
+    # Telegram (FIXED + printf + retry)
     # =========================
     - name: Telegram notify
       if: always()
@@ -167,10 +172,13 @@ jobs:
 
         if [ "${{ job.status }}" = "success" ]; then
 
-          CAPTION="✅ Mayuri Kernel\nDevice: ${DEVICE_TREE}\nBuild: ${B_MIN}m ${B_SEC}s\nBranch: ${GITHUB_REF_NAME}\nCommit: ${GITHUB_SHA::7}\nKSU: ${KSU_VERSION} (${KSU_TAG})\n\nMD5: \`${Z_MD5}\`\nSHA256: \`${Z_SHA256}\`"
+          CAPTION=$(printf "✅ Mayuri Kernel\nDevice: %s\nBuild: %sm %ss\nBranch: %s\nCommit: %s\nKSU: %s (%s)\n\nMD5: \\`%s\\`\nSHA256: \\`%s\\`" \
+            "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" \
+            "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
 
           for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s -F chat_id="$CHAT" \
+            curl -s --retry 3 --connect-timeout 10 \
+              -F chat_id="$CHAT" \
               -F document=@"${ARTIFACT_NAME}.zip" \
               -F caption="$CAPTION" \
               -F parse_mode=Markdown \
@@ -179,10 +187,12 @@ jobs:
 
         else
 
-          FAIL="❌ Mayuri Kernel FAILED\nDevice: ${DEVICE_TREE}\nBranch: ${GITHUB_REF_NAME}\nCommit: ${GITHUB_SHA::7}\nCheck build.log"
+          FAIL=$(printf "❌ Mayuri Kernel FAILED\nDevice: %s\nBranch: %s\nCommit: %s\nCheck build.log" \
+            "$DEVICE_TREE" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}")
 
           for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s -F chat_id="$CHAT" \
+            curl -s --retry 3 --connect-timeout 10 \
+              -F chat_id="$CHAT" \
               -F document=@build.log \
               -F caption="$FAIL" \
               -F parse_mode=Markdown \
@@ -200,8 +210,10 @@ jobs:
         {
           echo "# Mayuri Kernel (Stable)"
           echo "| Status | ${{ job.status }} |"
+          echo "| Branch | ${GITHUB_REF_NAME} |"
           echo "| Commit | ${GITHUB_SHA::7} |"
-          echo "| Build Time | ${B_TIME}s |"
+          echo "| KSU | ${KSU_VERSION} |"
+          echo "| Time | ${B_TIME}s |"
           echo "| MD5 | ${Z_MD5} |"
           echo "| SHA256 | ${Z_SHA256} |"
         } >> $GITHUB_STEP_SUMMARY
