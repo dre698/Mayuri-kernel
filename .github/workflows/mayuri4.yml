@@ -86,7 +86,7 @@ jobs:
         echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
         echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
 
-        echo "CC=ccache clang" >> $GITHUB_ENV
+        echo "CC=/tmp/clang/bin/clang" >> $GITHUB_ENV
 
         echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
@@ -196,16 +196,37 @@ jobs:
     # ==========================================================
     # Build
     # ==========================================================
+    
+    - name: Verify Clang
+      run: |
+        echo "PATH=$PATH"
+        echo
+
+        echo "which clang:"
+        which clang
+        echo
+
+        echo "clang version:"
+        clang --version
+        echo
+
+        echo "ccache:"
+        ccache --version
 
     - name: Build kernel (Retry x2)
       run: |
         build_kernel() {
           START=$(date +%s)
 
+          echo "========== COMPILER =========="
+          which clang
+          clang --version | head -1
+          echo
+
           make -j"$(nproc)" \
             O=out \
             ARCH=$ARCH \
-            CC="$CC" \
+            CC=/tmp/clang/bin/clang \
             CLANG_TRIPLE=$CLANG_TRIPLE \
             CROSS_COMPILE=$CROSS_COMPILE \
             CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
@@ -226,17 +247,11 @@ jobs:
 
         echo "========== BUILD ATTEMPT #1 =========="
 
-        build_kernel
-
-        if [ $? -ne 0 ]; then
-          echo "First build failed, retrying..."
-
-          sleep 5
-
-          echo "========== BUILD ATTEMPT #2 =========="
-
-          build_kernel
-        fi
+        build_kernel || {
+            echo "First build failed, retrying..."
+            sleep 5
+            build_kernel || exit 1
+        }
 
     # ==========================================================
     # Detect Kernel Image
@@ -366,7 +381,7 @@ jobs:
         B_MIN=$((B_TIME / 60))
         B_SEC=$((B_TIME % 60))
 
-        COMPILER=$(clang --version | head -1)
+        COMPILER=$(/tmp/clang/bin/clang --version | head -1)
 
         KSU_VERSION=${KSU_VERSION:-unknown}
         KSU_TAG=${KSU_TAG:-unknown}
@@ -425,7 +440,7 @@ jobs:
     - name: Build Summary
       if: always()
       run: |
-        COMPILER=$(clang --version | head -1)
+        COMPILER=$(/tmp/clang/bin/clang --version | head -1)
 
         {
           echo "# ======================================================================"
