@@ -1,4 +1,4 @@
-name: Mayuri Kernel Production CI (Stable)
+name: Mayuri Kernel Production CI (Nadeko Stable)
 
 on:
   workflow_dispatch:
@@ -58,7 +58,6 @@ jobs:
 
         echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
 
-        # IMPORTANT: force clang-only build
         echo "CROSS_COMPILE=" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
@@ -85,12 +84,11 @@ jobs:
         echo "DEVICE_TREE=$DEVICE" >> $GITHUB_ENV
 
     # =========================
-    # KernelSU
+    # KernelSU (safe)
     # =========================
     - name: KernelSU Integration
       run: |
         rm -rf KernelSU
-
         git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU || true
 
         if [ -f KernelSU/kernel/setup.sh ]; then
@@ -118,10 +116,11 @@ jobs:
         make O=out ARCH=${ARCH} olddefconfig
 
     # =========================
-    # Build (retry safe)
+    # Build kernel (strict + retry)
     # =========================
     - name: Build kernel
       run: |
+        set -e
         START=$(date +%s)
 
         for i in 1 2 3; do
@@ -137,15 +136,27 @@ jobs:
         echo "B_TIME=$(($(date +%s)-START))" >> $GITHUB_ENV
 
     # =========================
-    # Detect image
+    # Nadeko-style image detection
     # =========================
-    - name: Detect image
+    - name: Detect kernel image (Nadeko style)
       run: |
-        if [ -f out/arch/${ARCH}/boot/Image.gz-dtb ]; then
-          echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
+        OUT="out/arch/${ARCH}/boot"
+
+        if [ -f "$OUT/Image.gz-dtb" ]; then
+          IMG="Image.gz-dtb"
+        elif [ -f "$OUT/Image.gz" ]; then
+          IMG="Image.gz"
+        elif [ -f "$OUT/Image.lz4" ]; then
+          IMG="Image.lz4"
+        elif [ -f "$OUT/Image" ]; then
+          IMG="Image"
         else
-          echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
+          echo "❌ Kernel image not found!"
+          ls -lah "$OUT"
+          exit 1
         fi
+
+        echo "KERNEL_IMAGE=$IMG" >> $GITHUB_ENV
 
     # =========================
     # Artifact name
@@ -155,12 +166,22 @@ jobs:
         echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-KSU${KSU_VERSION}-${GITHUB_SHA::7}" >> $GITHUB_ENV
 
     # =========================
-    # AnyKernel
+    # AnyKernel (safe)
     # =========================
     - name: Package AnyKernel3
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-        cp out/arch/${ARCH}/boot/${KERNEL_IMAGE} anykernel/
+
+        FILE="out/arch/${ARCH}/boot/${KERNEL_IMAGE}"
+
+        if [ ! -f "$FILE" ]; then
+          echo "Missing kernel image: $FILE"
+          exit 1
+        fi
+
+        cp "$FILE" anykernel/
+        cp -f out/arch/${ARCH}/boot/dtb*.img anykernel/ 2>/dev/null || true
+        cp -f out/arch/${ARCH}/boot/dtbo.img anykernel/ 2>/dev/null || true
 
         cd anykernel
         zip -r9 ../${ARTIFACT_NAME}.zip . -x "*.git*" "*README*"
@@ -174,7 +195,7 @@ jobs:
         echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
 
     # =========================
-    # Telegram (STABLE + COPY SAFE)
+    # Telegram (copy-safe + Nadeko format)
     # =========================
     - name: Telegram notify
       if: always()
@@ -216,7 +237,7 @@ jobs:
       if: always()
       run: |
         {
-          echo "# Mayuri Kernel (Stable)"
+          echo "# Mayuri Kernel (Nadeko Stable)"
           echo ""
           echo "| Key | Value |"
           echo "|-----|------|"
