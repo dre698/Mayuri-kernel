@@ -1,0 +1,254 @@
+name: Mayuri Kernel Production CI (Stable+)
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_DEFCONFIG: blossom_defconfig
+  KERNEL_ARCH: arm64
+  KBUILD_BUILD_USER: dre698
+  KBUILD_BUILD_HOST: github-actions
+
+  USE_CCACHE: 1
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+  BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  PRIVATE_CHAT_ID: ${{ secrets.TELEGRAM_PRIVATE_CHAT_ID }}
+  GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc bison flex build-essential git zip curl wget jq ccache \
+          libssl-dev libelf-dev cpio kmod python3
+
+    - name: Setup ccache
+      run: |
+        mkdir -p "$CCACHE_DIR"
+        ccache --set-config=cache_dir="$CCACHE_DIR"
+        ccache --max-size=2G
+        ccache --zero-stats
+
+    - name: Download Clang
+      run: |
+        git clone --depth=1 \
+          https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
+          /tmp/clang
+
+    - name: Download GCC
+      run: |
+        git clone --depth=1 https://github.com/Sakurajima07/aarch64-linux-android-4.9 /tmp/gcc64
+        git clone --depth=1 https://github.com/Sakurajima07/arm-linux-androideabi-4.9 /tmp/gcc
+
+    - name: Setup build environment
+      run: |
+        echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+        echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+        echo "/tmp/clang/bin" >> $GITHUB_PATH
+        echo "/tmp/gcc64/bin" >> $GITHUB_PATH
+        echo "/tmp/gcc/bin" >> $GITHUB_PATH
+
+    - name: Detect Device
+      run: |
+        DEVICE="blossom"
+        if grep -q "^CONFIG_ARCH_MT6765=y" arch/arm64/configs/${KERNEL_DEFCONFIG}; then
+          DEVICE="blossom"
+        fi
+        echo "DEVICE_TREE=$DEVICE" >> $GITHUB_ENV
+        echo "Detected device : $DEVICE"
+
+    - name: Telegram Init
+      run: |
+        RESP=$(curl -s \
+          -X POST \
+          "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d text="🚀 Mayuri Kernel CI Started (Stable+)")
+        echo "TG_MSG_ID=$(echo "$RESP" | jq -r '.result.message_id')" >> $GITHUB_ENV
+
+    - name: Clone KernelSU-Next
+      run: |
+        rm -rf KernelSU KernelSU-Next
+        git clone --depth=1 \
+          https://github.com/KernelSU-Next/KernelSU-Next.git \
+          KernelSU
+
+    - name: Detect KernelSU Version
+      run: |
+        cd KernelSU
+        COUNT=$(git rev-list --count HEAD)
+        TAG=$(git describe --tags --always)
+        KSU_VERSION=$((30000 + COUNT))
+        echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+        echo "KSU_TAG=$TAG" >> $GITHUB_ENV
+        echo "KernelSU Version : $KSU_VERSION"
+        echo "KernelSU Tag     : $TAG"
+
+    - name: Integrate KernelSU
+      run: |
+        bash KernelSU/kernel/setup.sh legacy
+
+    - name: Clean source
+      run: |
+        make mrproper || true
+        mkdir -p out
+
+    - name: Configure kernel
+      run: |
+        make \
+          O=out \
+          ARCH=$ARCH \
+          $KERNEL_DEFCONFIG
+
+        make \
+          O=out \
+          ARCH=$ARCH \
+          olddefconfig
+
+        sed -i 's/# CONFIG_KALLSYMS_ALL is not set/CONFIG_KALLSYMS_ALL=y/' out/.config
+        grep -q "^CONFIG_KALLSYMS_ALL=y" out/.config || echo "CONFIG_KALLSYMS_ALL=y" >> out/.config
+        sed -i 's/CONFIG_FRAME_WARN=[0-9]*/CONFIG_FRAME_WARN=8192/g' out/.config
+
+        echo "[*] Config check:"
+        grep "CONFIG_KSU\|CONFIG_KALLSYMS" out/.config
+
+    - name: Build kernel
+      run: |
+        START=$(date +%s)
+
+        set -o pipefail
+
+        make -j"$(nproc)" \
+          O=out \
+          ARCH=$ARCH \
+          CC=/tmp/clang/bin/clang \
+          HOSTCC=gcc \
+          HOSTCXX=g++ \
+          HOSTLD=ld \
+          CLANG_TRIPLE=$CLANG_TRIPLE \
+          CROSS_COMPILE=$CROSS_COMPILE \
+          CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+          KBUILD_BUILD_USER=$KBUILD_BUILD_USER \
+          KBUILD_BUILD_HOST=$KBUILD_BUILD_HOST \
+          KBUILD_WERROR=0 \
+          KCFLAGS="-Wno-unknown-warning-option" \
+          2>&1 | tee build.log
+
+        END=$(date +%s)
+        echo "B_TIME=$((END-START))" >> $GITHUB_ENV
+
+    - name: Upload Build Log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
+        if-no-files-found: warn
+
+    - name: Detect Image
+      run: |
+        IMAGE_DIR="out/arch/$ARCH/boot"
+        if [ -f "$IMAGE_DIR/Image.gz-dtb" ]; then
+          IMAGE="Image.gz-dtb"
+        elif [ -f "$IMAGE_DIR/Image.gz" ]; then
+          IMAGE="Image.gz"
+        elif [ -f "$IMAGE_DIR/Image" ]; then
+          IMAGE="Image"
+        else
+          echo "::error::Kernel image not found"
+          exit 1
+        fi
+        echo "KERNEL_IMAGE=$IMAGE" >> $GITHUB_ENV
+        echo "Kernel image : $IMAGE"
+
+    - name: Artifact name
+      run: |
+        DATE=$(date +%y%m%d)
+        TIME=$(date +%H%M)
+        echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-ksn${KSU_VERSION}-${DATE}-${TIME}-${GITHUB_SHA::9}" >> $GITHUB_ENV
+
+    - name: Package AnyKernel3
+      run: |
+        rm -rf anykernel
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+        cp out/arch/$ARCH/boot/$KERNEL_IMAGE anykernel/
+        cd anykernel
+        zip -r9 "../${ARTIFACT_NAME}.zip" . \
+          -x "*.git*" -x "*README*" -x "*.github*"
+        cd ..
+        ls -lh "${ARTIFACT_NAME}.zip"
+
+    - name: Generate Hash
+      run: |
+        MD5=$(md5sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+        SHA256=$(sha256sum "${ARTIFACT_NAME}.zip" | awk '{print $1}')
+        echo "Z_MD5=$MD5" >> $GITHUB_ENV
+        echo "Z_SHA256=$SHA256" >> $GITHUB_ENV
+
+    - name: Upload Artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ env.ARTIFACT_NAME }}.zip
+        compression-level: 0
+
+    - name: Telegram Send
+      if: always()
+      run: |
+        set +e
+
+        B_TIME=${B_TIME:-0}
+        B_MIN=$((B_TIME / 60))
+        B_SEC=$((B_TIME % 60))
+
+        COMPILER=$(/tmp/clang/bin/clang --version | head -1)
+        KSU_VERSION=${KSU_VERSION:-unknown}
+        KSU_TAG=${KSU_TAG:-unknown}
+
+        if [ "${{ job.status }}" = "success" ]; then
+          CAPTION=$(printf "✅ *Mayuri Kernel*\n\n📱 Device : %s\n⏱ Build : %sm %ss\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n⚙️ Compiler :\n\`%s\`\n\n🔐 KernelSU :\n\`%s (%s)\`\n\n📦 MD5 :\n\`%s\`\n\n🔎 SHA256 :\n\`%s\`" \
+            "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" \
+            "$COMPILER" "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
+            curl -s --retry 3 --retry-delay 2 \
+              -F chat_id="$CHAT" \
+              -F document=@"${ARTIFACT_NAME}.zip" \
+              -F caption="$CAPTION" \
+              -F parse_mode=Markdown \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+          done
+        else
+          FAIL_CAPTION=$(printf "❌ *Mayuri Kernel Build Failed*\n\n📱 Device : %s\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n📄 build.log attached." \
+            "$DEVICE_TREE" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}")
+          for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
+            curl -s --retry 3 --retry-delay 2 \
+              -F chat_id="$CHAT" \
+              -F document=@build.log \
+              -F caption="$FAIL_CAPTION" \
+              -F parse_mode=Markdown \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+          done
+        fi
+
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -rf anykernel KernelSU
+        ccache -s || true
+        echo "Cleanup finished."
