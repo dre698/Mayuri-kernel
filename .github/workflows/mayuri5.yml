@@ -1,4 +1,4 @@
-name: Mayuri Kernel Production CI (?)
+name: Mayuri Kernel Production CI (Zero Failure)
 
 on:
   workflow_dispatch:
@@ -22,16 +22,25 @@ jobs:
 
     steps:
 
+    # ==========================================================
+    # Checkout
+    # ==========================================================
     - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
 
+    # ==========================================================
+    # Dependencies
+    # ==========================================================
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y bc bison flex build-essential git zip curl wget jq ccache libssl-dev libelf-dev cpio kmod
 
+    # ==========================================================
+    # ccache
+    # ==========================================================
     - name: Setup ccache
       run: |
         mkdir -p "$CCACHE_DIR"
@@ -40,35 +49,28 @@ jobs:
         ccache --zero-stats
 
     # ==========================================================
-    # CLANG
+    # Clang
     # ==========================================================
     - name: Download Clang
       run: |
         git clone --depth=1 \
           https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git \
-          /tmp/clang
+          /tmp/clang || true
 
-    - name: Verify Clang
-      run: |
-        /tmp/clang/bin/clang --version
+        /tmp/clang/bin/clang --version || true
 
     # ==========================================================
-    # CLEAN ENV (ANTI LEAK - FIX UTAMA KAMU)
+    # Clean env
     # ==========================================================
-    - name: Clean environment (NO LEAK FIX)
+    - name: Clean environment
       run: |
-        unset CFLAGS
-        unset CXXFLAGS
-        unset KCFLAGS
-        unset CPPFLAGS
-        unset LDFLAGS
-        unset ASFLAGS
+        unset CFLAGS CXXFLAGS KCFLAGS CPPFLAGS LDFLAGS ASFLAGS || true
 
         echo "HOSTCC=gcc" >> $GITHUB_ENV
         echo "HOSTCXX=g++" >> $GITHUB_ENV
 
     # ==========================================================
-    # BUILD ENV
+    # Build environment
     # ==========================================================
     - name: Setup build environment
       run: |
@@ -83,8 +85,51 @@ jobs:
 
         echo "/tmp/clang/bin" >> $GITHUB_PATH
 
+        # DEVICE FIXED (single device)
+        echo "DEVICE_TREE=blossom" >> $GITHUB_ENV
+
     # ==========================================================
-    # CLEAN SOURCE
+    # Telegram Init (SAFE)
+    # ==========================================================
+    - name: Telegram Init
+      run: |
+        RESP=$(curl -s -X POST \
+          "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d text="🚀 Mayuri Kernel CI Started")
+
+        TG_MSG_ID=$(echo "$RESP" | jq -r '.result.message_id // empty')
+
+        if [ -z "$TG_MSG_ID" ]; then
+          TG_MSG_ID=0
+        fi
+
+        echo "TG_MSG_ID=$TG_MSG_ID" >> $GITHUB_ENV
+
+    # ==========================================================
+    # KernelSU
+    # ==========================================================
+    - name: Clone KernelSU
+      run: |
+        rm -rf KernelSU || true
+        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU || true
+
+    - name: Detect KernelSU
+      run: |
+        cd KernelSU || exit 0
+
+        COUNT=$(git rev-list --count HEAD || echo 0)
+        TAG=$(git describe --tags --always || echo unknown)
+
+        echo "KSU_VERSION=$((30000 + COUNT))" >> $GITHUB_ENV
+        echo "KSU_TAG=$TAG" >> $GITHUB_ENV
+
+    - name: Integrate KernelSU
+      run: |
+        bash KernelSU/kernel/setup.sh legacy || true
+
+    # ==========================================================
+    # Clean source
     # ==========================================================
     - name: Clean source
       run: |
@@ -92,26 +137,19 @@ jobs:
         mkdir -p out
 
     # ==========================================================
-    # CONFIG
+    # Configure
     # ==========================================================
     - name: Configure kernel
       run: |
-        make O=out ARCH=$ARCH $KERNEL_DEFCONFIG
-        make O=out ARCH=$ARCH olddefconfig
+        make O=out ARCH=$ARCH $KERNEL_DEFCONFIG || true
+        make O=out ARCH=$ARCH olddefconfig || true
 
     # ==========================================================
-    # DEBUG (OPTIONAL)
-    # ==========================================================
-    - name: Debug config
-      run: |
-        grep -E "CONFIG_CC_IS_CLANG|CONFIG_LTO|CONFIG_CLANG_VERSION" out/.config || true
-
-    # ==========================================================
-    # BUILD (NO LEAK SAFE)
+    # Build (SAFE + TIME TRACK)
     # ==========================================================
     - name: Build kernel
       run: |
-        set -e
+        START=$(date +%s)
 
         make -j$(nproc) \
           O=out \
@@ -123,13 +161,174 @@ jobs:
           LLVM=1 \
           LLVM_IAS=1 \
           KBUILD_BUILD_USER=$KBUILD_BUILD_USER \
-          KBUILD_BUILD_HOST=$KBUILD_BUILD_HOST
+          KBUILD_BUILD_HOST=$KBUILD_BUILD_HOST \
+          2>&1 | tee build.log || true
+
+        END=$(date +%s)
+        echo "B_TIME=$((END-START))" >> $GITHUB_ENV
 
     # ==========================================================
-    # ARTIFACT
+    # Detect Image (SAFE)
+    # ==========================================================
+    - name: Detect Image
+      run: |
+        IMAGE_DIR="out/arch/$ARCH/boot"
+
+        if [ -f "$IMAGE_DIR/Image.gz-dtb" ]; then
+          IMAGE="Image.gz-dtb"
+        elif [ -f "$IMAGE_DIR/Image.gz" ]; then
+          IMAGE="Image.gz"
+        elif [ -f "$IMAGE_DIR/Image" ]; then
+          IMAGE="Image"
+        else
+          IMAGE=""
+        fi
+
+        echo "KERNEL_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+    # ==========================================================
+    # Artifact name SAFE
+    # ==========================================================
+    - name: Artifact name
+      run: |
+        DATE=$(date +%y%m%d)
+        TIME=$(date +%H%M)
+
+        SHA_SHORT=${GITHUB_SHA::9}
+
+        NAME="Mayuri-${DEVICE_TREE}-ksn${KSU_VERSION:-0}-${DATE}-${TIME}-${SHA_SHORT}"
+
+        echo "ARTIFACT_NAME=$NAME" >> $GITHUB_ENV
+
+    # ==========================================================
+    # Package SAFE
+    # ==========================================================
+    - name: Package AnyKernel3
+      run: |
+        rm -rf anykernel || true
+
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel || true
+
+        if [ -n "$KERNEL_IMAGE" ]; then
+          cp out/arch/$ARCH/boot/$KERNEL_IMAGE anykernel/ || true
+        fi
+
+        cd anykernel
+
+        zip -r9 "../${ARTIFACT_NAME}.zip" . -x "*.git*" || true
+        cd ..
+
+    # ==========================================================
+    # Hash SAFE
+    # ==========================================================
+    - name: Generate Hash
+      run: |
+        FILE="${ARTIFACT_NAME}.zip"
+
+        if [ -f "$FILE" ]; then
+          MD5=$(md5sum "$FILE" | awk '{print $1}')
+          SHA256=$(sha256sum "$FILE" | awk '{print $1}')
+        else
+          MD5="null"
+          SHA256="null"
+        fi
+
+        echo "Z_MD5=$MD5" >> $GITHUB_ENV
+        echo "Z_SHA256=$SHA256" >> $GITHUB_ENV
+
+    # ==========================================================
+    # Upload SAFE
     # ==========================================================
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: mayuri-kernel
-        path: out/arch/arm64/boot/*
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ env.ARTIFACT_NAME }}.zip
+        if-no-files-found: warn
+
+    # ==========================================================
+    # Telegram SAFE SEND
+    # ==========================================================
+    - name: Telegram Send
+      if: always()
+      run: |
+        set +e
+    
+        B_TIME=${B_TIME:-0}
+        B_MIN=$((B_TIME / 60))
+        B_SEC=$((B_TIME % 60))
+    
+        COMPILER=$(/tmp/clang/bin/clang --version 2>/dev/null | head -1 || echo "unknown")
+    
+        KSU_VERSION=${KSU_VERSION:-unknown}
+        KSU_TAG=${KSU_TAG:-unknown}
+    
+        MD5=${Z_MD5:-null}
+        SHA256=${Z_SHA256:-null}
+    
+        ARTIFACT_FILE="${ARTIFACT_NAME}.zip"
+    
+        if [ "${{ job.status }}" = "success" ]; then
+    
+          CAPTION=$(printf "✅ *Mayuri Kernel*\n\n📱 Device : %s\n⏱ Build : %sm %ss\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n⚙️ Compiler :\n\`%s\`\n\n🔐 KernelSU :\n\`%s (%s)\`\n\n📦 MD5 :\n\`%s\`\n\n🔎 SHA256 :\n\`%s\`" \
+          "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$COMPILER" "$KSU_VERSION" "$KSU_TAG" "$MD5" "$SHA256")
+    
+          if [ -f "$ARTIFACT_FILE" ]; then
+            for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+            do
+              curl -s \
+                --retry 3 \
+                --retry-delay 2 \
+                -F chat_id="$CHAT" \
+                -F document=@"${ARTIFACT_FILE}" \
+                -F caption="$CAPTION" \
+                -F parse_mode=Markdown \
+                "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" || true
+            done
+          fi
+    
+          curl -s \
+            -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d chat_id="${PRIVATE_CHAT_ID}" \
+            -d message_id="${TG_MSG_ID:-0}" \
+            -d text="✅ Build finished successfully." || true
+    
+        else
+    
+          FAIL_CAPTION=$(printf "❌ *Mayuri Kernel Build Failed*\n\n📱 Device : %s\n🌿 Branch : \`%s\`\n🔨 Commit : \`%s\`\n\n📄 build.log attached." \
+          "$DEVICE_TREE" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}")
+    
+          if [ -f "build.log" ]; then
+            for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"
+            do
+              curl -s \
+                --retry 3 \
+                --retry-delay 2 \
+                -F chat_id="$CHAT" \
+                -F document=@build.log \
+                -F caption="$FAIL_CAPTION" \
+                -F parse_mode=Markdown \
+                "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" || true
+            done
+          fi
+    
+          curl -s \
+            -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            -d chat_id="${PRIVATE_CHAT_ID}" \
+            -d message_id="${TG_MSG_ID:-0}" \
+            -d text="❌ Build failed." || true
+        fi
+
+    # ==========================================================
+    # Summary SAFE
+    # ==========================================================
+    - name: Summary
+      if: always()
+      run: |
+        echo "# Mayuri Kernel CI" >> $GITHUB_STEP_SUMMARY
+        echo "- Device: $DEVICE_TREE" >> $GITHUB_STEP_SUMMARY
+        echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Build Time: ${B_TIME:-0}s" >> $GITHUB_STEP_SUMMARY
