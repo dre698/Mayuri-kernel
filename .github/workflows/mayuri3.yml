@@ -19,38 +19,25 @@ jobs:
 
     steps:
 
-    # =========================
-    # Checkout
-    # =========================
     - name: Checkout
       uses: actions/checkout@v4
 
-    # =========================
-    # Dependencies
-    # =========================
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           bc bison flex build-essential git zip curl wget ccache \
-          libssl-dev libelf-dev cpio kmod
+          libssl-dev libelf-dev cpio kmod jq
 
-    # =========================
-    # Clang (FIX TOOLCHAIN)
-    # =========================
     - name: Clang toolchain
       run: |
         git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git /tmp/clang
 
-    # =========================
-    # Environment FIX (CRITICAL)
-    # =========================
     - name: Setup environment
       run: |
         echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
         echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
 
-        # FIX ERROR: missing gcc stub (avoid kernel scripts calling gcc)
         echo "CC=clang" >> $GITHUB_ENV
         echo "CROSS_COMPILE=" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=" >> $GITHUB_ENV
@@ -58,50 +45,53 @@ jobs:
 
         echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
 
+        # FIX missing device label
+        echo "DEVICE_TREE=blossom" >> $GITHUB_ENV
+
     # =========================
-    # Clean
+    # TELEGRAM PROGRESS INIT
     # =========================
+    - name: Telegram init progress
+      run: |
+        RESP=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d text="🚀 Mayuri Kernel CI started...")
+
+        MSG_ID=$(echo $RESP | jq -r '.result.message_id')
+        echo "TG_MSG_ID=$MSG_ID" >> $GITHUB_ENV
+
+    - name: Update Telegram progress (setup)
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d message_id="${TG_MSG_ID}" \
+          -d text="⚙️ Setting up toolchain..."
+
     - name: Clean source
       run: make mrproper || true
 
-    # =========================
-    # Configure FIX (no interactive prompt crash)
-    # =========================
     - name: Configure kernel
       run: |
         mkdir -p out
-        make O=out ARCH=${ARCH} ${KERNEL_DEFCONFIG} || exit 1
+        make O=out ARCH=${ARCH} ${KERNEL_DEFCONFIG} < /dev/null
         yes "" | make O=out ARCH=${ARCH} olddefconfig
 
-    # =========================
-    # KernelSU (stable fallback)
-    # =========================
+    - name: Update Telegram progress (config done)
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d message_id="${TG_MSG_ID}" \
+          -d text="🔧 Config complete. Starting build..."
+
     - name: KernelSU Integration
       run: |
         rm -rf KernelSU
-
-        if git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU; then
-          echo "KernelSU Next"
-        elif git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU; then
-          echo "ReSukiSU"
-        else
-          git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
-        fi
+        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU || \
+        git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU || \
+        git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU
 
         bash KernelSU/kernel/setup.sh legacy || true
 
-    # =========================
-    # KernelSU version
-    # =========================
-    - name: KernelSU version
-      run: |
-        KSU_GIT=$(cd KernelSU && git rev-list --count HEAD || echo 0)
-        echo "KSU_VERSION=$((30000 + KSU_GIT))" >> $GITHUB_ENV
-        echo "KSU_TAG=$(cd KernelSU && git describe --tags --always)" >> $GITHUB_ENV
-
-    # =========================
-    # Build kernel
-    # =========================
     - name: Build kernel
       run: |
         START=$(date +%s)
@@ -116,53 +106,41 @@ jobs:
 
         echo "B_TIME=$(($(date +%s)-START))" >> $GITHUB_ENV
 
-    # =========================
-    # Detect image (SAFE)
-    # =========================
-    - name: Detect kernel image
+    - name: Update Telegram progress (build done)
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+          -d chat_id="${PRIVATE_CHAT_ID}" \
+          -d message_id="${TG_MSG_ID}" \
+          -d text="🛠 Build finished. Packaging..."
+
+    - name: Detect image
       run: |
         if [ -f out/arch/${ARCH}/boot/Image.gz-dtb ]; then
           echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
         elif [ -f out/arch/${ARCH}/boot/Image.gz ]; then
           echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
-        elif [ -f out/arch/${ARCH}/boot/Image ]; then
-          echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
         else
-          echo "NO_KERNEL_IMAGE"
-          exit 1
+          echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
         fi
 
-    # =========================
-    # Artifact name
-    # =========================
     - name: Artifact name
       run: |
         echo "ARTIFACT_NAME=Mayuri-${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-    # =========================
-    # AnyKernel FIX (missing file issue fixed)
-    # =========================
     - name: Package AnyKernel3
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+        cp out/arch/${ARCH}/boot/${KERNEL_IMAGE} anykernel/
+
         cd anykernel
-
-        cp ../out/arch/${ARCH}/boot/${KERNEL_IMAGE} ./ || exit 1
-
         zip -r9 ../${ARTIFACT_NAME}.zip . -x "*.git*" "*README*"
 
-    # =========================
-    # Hash
-    # =========================
     - name: Hash
       run: |
         echo "Z_MD5=$(md5sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
         echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
 
-    # =========================
-    # Telegram (FIXED + printf + retry)
-    # =========================
-    - name: Telegram notify
+    - name: Final Telegram update (printf)
       if: always()
       run: |
         set +e
@@ -176,8 +154,10 @@ jobs:
             "$DEVICE_TREE" "$B_MIN" "$B_SEC" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" \
             "$KSU_VERSION" "$KSU_TAG" "$Z_MD5" "$Z_SHA256")
 
+          TEXT="SUCCESS"
+
           for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s --retry 3 --connect-timeout 10 \
+            curl -s --retry 3 \
               -F chat_id="$CHAT" \
               -F document=@"${ARTIFACT_NAME}.zip" \
               -F caption="$CAPTION" \
@@ -191,19 +171,15 @@ jobs:
             "$DEVICE_TREE" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}")
 
           for CHAT in "$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID"; do
-            curl -s --retry 3 --connect-timeout 10 \
+            curl -s --retry 3 \
               -F chat_id="$CHAT" \
               -F document=@build.log \
               -F caption="$FAIL" \
               -F parse_mode=Markdown \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
           done
-
         fi
 
-    # =========================
-    # GitHub Summary
-    # =========================
     - name: Summary
       if: always()
       run: |
@@ -212,7 +188,6 @@ jobs:
           echo "| Status | ${{ job.status }} |"
           echo "| Branch | ${GITHUB_REF_NAME} |"
           echo "| Commit | ${GITHUB_SHA::7} |"
-          echo "| KSU | ${KSU_VERSION} |"
           echo "| Time | ${B_TIME}s |"
           echo "| MD5 | ${Z_MD5} |"
           echo "| SHA256 | ${Z_SHA256} |"
