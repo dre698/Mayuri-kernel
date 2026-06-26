@@ -1,0 +1,213 @@
+name: Mayuri Kernel Production CI
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_DEFCONFIG: blossom_defconfig
+  KERNEL_ARCH: arm64
+  KBUILD_BUILD_USER: dre698
+  KBUILD_BUILD_HOST: github-actions
+
+  BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  PRIVATE_CHAT_ID: ${{ secrets.TELEGRAM_PRIVATE_CHAT_ID }}
+  GROUP_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_CHAT_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+
+    # =========================
+    # Checkout
+    # =========================
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # =========================
+    # Dependencies
+    # =========================
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc bison flex build-essential git zip curl wget ccache \
+          libssl-dev libelf-dev cpio kmod
+
+    # =========================
+    # Clang
+    # =========================
+    - name: Clang toolchain
+      run: |
+        git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r428724.git /tmp/clang
+
+    # =========================
+    # Env setup
+    # =========================
+    - name: Setup environment
+      run: |
+        echo "ARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+        echo "SUBARCH=${KERNEL_ARCH}" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "PATH=/tmp/clang/bin:$PATH" >> $GITHUB_ENV
+
+    # =========================
+    # Clean
+    # =========================
+    - name: Clean source
+      run: make mrproper || true
+
+    # =========================
+    # Device Tree Auto Detect (SAFE)
+    # =========================
+    - name: Detect Device Tree
+      run: |
+        DTS_DIR="arch/${KERNEL_ARCH}/boot/dts"
+
+        DEVICE=$(find "$DTS_DIR" -name "*.dts" 2>/dev/null \
+          | grep -i "blossom\|mt" \
+          | head -n 1 \
+          | xargs basename 2>/dev/null \
+          | sed 's/.dts//')
+
+        if [ -z "$DEVICE" ]; then
+          DEVICE="blossom"
+        fi
+
+        echo "DEVICE_TREE=$DEVICE" >> $GITHUB_ENV
+        echo "Detected device: $DEVICE"
+
+    # =========================
+    # KernelSU AUTO (Next / ReSukiSU / Legacy)
+    # =========================
+    - name: KernelSU Integration
+      run: |
+        rm -rf KernelSU
+
+        if git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU; then
+          echo "KernelSU Next"
+        elif git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git KernelSU; then
+          echo "ReSukiSU"
+        else
+          git clone --depth=1 https://github.com/tiann/KernelSU.git KernelSU || true
+        fi
+
+        if [ -f KernelSU/kernel/setup.sh ]; then
+          bash KernelSU/kernel/setup.sh legacy || true
+        elif [ -f KernelSU/setup.sh ]; then
+          bash KernelSU/setup.sh legacy || true
+        fi
+
+    # =========================
+    # KernelSU version
+    # =========================
+    - name: KernelSU version
+      run: |
+        if [ -d KernelSU ]; then
+          KSU_GIT=$(cd KernelSU && git rev-list --count HEAD || echo 0)
+          echo "KSU_VERSION=$((30000 + KSU_GIT))" >> $GITHUB_ENV
+          echo "KSU_TAG=$(cd KernelSU && git describe --tags --always || echo unknown)" >> $GITHUB_ENV
+        else
+          echo "KSU_VERSION=0" >> $GITHUB_ENV
+          echo "KSU_TAG=none" >> $GITHUB_ENV
+        fi
+
+    # =========================
+    # Configure
+    # =========================
+    - name: Configure kernel
+      run: |
+        mkdir -p out
+        make O=out ARCH=${ARCH} ${KERNEL_DEFCONFIG}
+        make O=out ARCH=${ARCH} olddefconfig
+
+    # =========================
+    # Build kernel
+    # =========================
+    - name: Build kernel
+      run: |
+        START=$(date +%s)
+
+        make -j$(nproc) O=out ARCH=${ARCH} \
+          CC=clang \
+          CLANG_TRIPLE=${CLANG_TRIPLE} \
+          CROSS_COMPILE=${CROSS_COMPILE} \
+          CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
+          2>&1 | tee build.log
+
+        echo "B_TIME=$(($(date +%s)-START))" >> $GITHUB_ENV
+
+    # =========================
+    # Detect image
+    # =========================
+    - name: Detect kernel image
+      run: |
+        if [ -f out/arch/${ARCH}/boot/Image.gz-dtb ]; then
+          IMG=Image.gz-dtb
+        elif [ -f out/arch/${ARCH}/boot/Image.gz ]; then
+          IMG=Image.gz
+        else
+          IMG=Image
+        fi
+
+        echo "KERNEL_IMAGE=$IMG" >> $GITHUB_ENV
+
+    # =========================
+    # Artifact name
+    # =========================
+    - name: Artifact name
+      run: |
+        echo "ARTIFACT_NAME=Mayuri-${DEVICE_TREE}-KSU${KSU_VERSION}-${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+    # =========================
+    # AnyKernel
+    # =========================
+    - name: Package AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+        cd anykernel
+
+        cp ../out/arch/${ARCH}/boot/${KERNEL_IMAGE} .
+
+        zip -r9 ../${ARTIFACT_NAME}.zip . -x "*.git*" "*README*"
+
+    # =========================
+    # Hash
+    # =========================
+    - name: Hash
+      run: |
+        echo "Z_MD5=$(md5sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
+        echo "Z_SHA256=$(sha256sum ${ARTIFACT_NAME}.zip | awk '{print $1}')" >> $GITHUB_ENV
+
+    # =========================
+    # Telegram (PRIVATE + GROUP SAFE)
+    # =========================
+    - name: Telegram notify
+      if: always()
+      run: |
+        set +e
+
+        TARGETS=("$PRIVATE_CHAT_ID" "$GROUP_CHAT_ID")
+
+        if [ "${{ job.status }}" = "success" ]; then
+
+          for CHAT in "${TARGETS[@]}"; do
+            curl -s -F chat_id="$CHAT" \
+              -F document=@${ARTIFACT_NAME}.zip \
+              -F caption="Mayuri Kernel OK | ${DEVICE_TREE} | KSU ${KSU_VERSION}" \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+          done
+
+        else
+
+          for CHAT in "${TARGETS[@]}"; do
+            curl -s -F chat_id="$CHAT" \
+              -F document=@build.log \
+              -F caption="BUILD FAILED | ${DEVICE_TREE}" \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
+          done
+
+        fi
